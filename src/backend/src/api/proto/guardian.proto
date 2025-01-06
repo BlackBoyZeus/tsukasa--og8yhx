@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package guardian.core.v1;
+
+import "google/protobuf/timestamp.proto";  // v3.0.0
+import "google/protobuf/empty.proto";      // v3.0.0
+import "security.proto";                   // Internal security service definitions
+import "ml.proto";                         // Internal ML service definitions
+
+option go_package = "guardian/core/v1/proto";
+option java_package = "com.guardian.core.v1.proto";
+option optimize_for = SPEED;
+
+// Enumeration of possible system states with validation
+enum SystemState {
+    SYSTEM_STATE_UNKNOWN = 0;
+    SYSTEM_STATE_INITIALIZING = 1;
+    SYSTEM_STATE_RUNNING = 2;
+    SYSTEM_STATE_DEGRADED = 3;
+    SYSTEM_STATE_ERROR = 4;
+}
+
+// Enhanced system resource utilization metrics
+message SystemMetrics {
+    float cpu_usage = 1;          // 0.0-1.0 scale
+    float memory_usage = 2;       // 0.0-1.0 scale
+    float gpu_usage = 3;          // 0.0-1.0 scale
+    google.protobuf.Timestamp timestamp = 4;
+    uint32 network_latency_ms = 5;  // Network latency in milliseconds
+    float disk_usage = 6;         // 0.0-1.0 scale
+    uint32 active_processes = 7;
+    uint32 open_file_descriptors = 8;
+    float network_throughput = 9;  // MB/s
+}
+
+// Component health status
+message ComponentHealth {
+    string component_id = 1;
+    SystemState state = 2;
+    string version = 3;
+    google.protobuf.Timestamp last_heartbeat = 4;
+    map<string, string> metadata = 5;
+}
+
+// Comprehensive system status with component tracking
+message SystemStatus {
+    SystemState state = 1;
+    uint64 uptime_seconds = 2;
+    SystemMetrics metrics = 3;
+    guardian.security.v1.SecurityStatus security_status = 4;
+    repeated guardian.ml.ModelMetadata ml_models = 5;
+    uint32 error_count = 6;
+    google.protobuf.Timestamp last_update = 7;
+    repeated ComponentHealth components = 8;
+    map<string, string> system_tags = 9;
+    float system_load = 10;
+}
+
+// Health check request with component filtering
+message HealthCheckRequest {
+    repeated string component_ids = 1;
+    bool deep_check = 2;
+    map<string, string> check_parameters = 3;
+}
+
+// Detailed health check response
+message HealthCheckResponse {
+    bool healthy = 1;
+    repeated ComponentHealth component_status = 2;
+    repeated string warnings = 3;
+    google.protobuf.Timestamp check_time = 4;
+    map<string, float> health_metrics = 5;
+}
+
+// Component coordination request
+message CoordinationRequest {
+    string initiator_id = 1;
+    repeated string target_components = 2;
+    string action = 3;
+    map<string, string> parameters = 4;
+    google.protobuf.Timestamp deadline = 5;
+}
+
+// Component coordination response
+message CoordinationResponse {
+    bool success = 1;
+    map<string, bool> component_results = 2;
+    repeated string failed_components = 3;
+    string error_message = 4;
+    google.protobuf.Timestamp completion_time = 5;
+}
+
+// Component management request
+message ManageComponentRequest {
+    string component_id = 1;
+    string action = 2;  // start/stop/restart/update
+    map<string, string> parameters = 3;
+    bool force = 4;
+}
+
+// Component management response
+message ManageComponentResponse {
+    bool success = 1;
+    string status = 2;
+    string error_message = 3;
+    ComponentHealth new_state = 4;
+}
+
+// Metrics stream filter
+message MetricsFilter {
+    repeated string metric_names = 1;
+    uint32 sample_rate_ms = 2;
+    float threshold = 3;
+    bool include_components = 4;
+}
+
+// Core Guardian service providing system management and monitoring
+service GuardianService {
+    // Get current system status
+    rpc GetSystemStatus(google.protobuf.Empty) returns (SystemStatus) {}
+
+    // Stream real-time system metrics
+    rpc StreamMetrics(MetricsFilter) returns (stream SystemMetrics) {}
+
+    // Perform system health check
+    rpc PerformHealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {}
+
+    // Coordinate component actions
+    rpc CoordinateComponents(CoordinationRequest) returns (CoordinationResponse) {}
+
+    // Monitor specific metrics with filtering
+    rpc MonitorMetrics(MetricsFilter) returns (stream SystemMetrics) {}
+
+    // Manage system components
+    rpc ManageComponents(ManageComponentRequest) returns (ManageComponentResponse) {}
+}
