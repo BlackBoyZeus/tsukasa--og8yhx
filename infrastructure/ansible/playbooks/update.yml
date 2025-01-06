@@ -1,0 +1,194 @@
+---
+# AI Guardian System Update Playbook
+# Version: 1.0.0
+# Purpose: Secure, zero-downtime system updates with comprehensive monitoring
+# Requires: ansible-core >= 2.15, ansible.posix >= 1.5, community.general >= 7.0
+
+- name: Guardian System Update
+  hosts: gaming_consoles
+  gather_facts: true
+  become: true
+  any_errors_fatal: true
+  serial: "{{ update_batch_size | default(10) }}"
+  max_fail_percentage: 0
+
+  vars:
+    update_version: "{{ guardian_version | default('latest') }}"
+    backup_enabled: true
+    health_check_timeout: 300
+    rollback_on_failure: true
+    update_batch_size: 10
+    min_health_score: 0.95
+    performance_threshold: 0.9
+    blue_green_enabled: true
+    progressive_rollout: true
+    audit_logging: true
+
+  pre_tasks:
+    - name: Verify system requirements and security posture
+      ansible.builtin.include_role:
+        name: security
+        tasks_from: verify.yml
+      tags: 
+        - security
+        - pre_update
+
+    - name: Establish baseline performance metrics
+      ansible.builtin.include_role:
+        name: monitoring
+        tasks_from: baseline.yml
+      tags:
+        - monitoring
+        - pre_update
+
+  roles:
+    - role: security
+      tags: 
+        - security
+        - update
+      vars:
+        enforce_signatures: true
+        secure_channel_required: true
+
+    - role: monitoring
+      tags:
+        - monitoring
+        - update
+      vars:
+        enhanced_metrics: true
+        performance_baseline: true
+
+  tasks:
+    - name: Create encrypted system backup
+      ansible.builtin.command:
+        cmd: "guardian-backup create pre-update --encrypted"
+      register: backup_result
+      failed_when: backup_result.rc != 0
+      changed_when: backup_result.rc == 0
+      tags:
+        - backup
+        - pre_update
+
+    - name: Verify package signatures
+      ansible.builtin.include_role:
+        name: security
+        tasks_from: verify_signatures.yml
+      vars:
+        package_version: "{{ update_version }}"
+      tags:
+        - security
+        - verification
+
+    - name: Setup blue environment
+      block:
+        - name: Create blue deployment environment
+          ansible.builtin.command:
+            cmd: "guardian-deploy create-env blue --version {{ update_version }}"
+          when: blue_green_enabled | bool
+
+        - name: Deploy updated services to blue environment
+          ansible.builtin.command:
+            cmd: "guardian-update deploy --env blue --version {{ update_version }}"
+          when: blue_green_enabled | bool
+      tags:
+        - deploy
+        - blue_green
+
+    - name: Update Guardian core services
+      block:
+        - name: Stop non-essential services
+          ansible.builtin.service:
+            name: "{{ item }}"
+            state: stopped
+          loop:
+            - guardian-ml
+            - guardian-monitoring
+          when: not blue_green_enabled | bool
+
+        - name: Update core services
+          ansible.builtin.command:
+            cmd: "guardian-update --version {{ update_version }} {% if blue_green_enabled %}--blue-green{% endif %}"
+          register: update_result
+          failed_when: update_result.rc != 0
+          notify: verify_update_status
+
+        - name: Update ML models
+          ansible.builtin.command:
+            cmd: "guardian-ml update-models --verify-signatures"
+          register: ml_update_result
+          failed_when: ml_update_result.rc != 0
+      tags:
+        - update
+        - core
+
+    - name: Verify system health
+      block:
+        - name: Run comprehensive health check
+          ansible.builtin.command:
+            cmd: "guardian-health-check --thorough"
+          register: health_check
+          until: health_check.rc == 0
+          retries: 3
+          delay: 10
+
+        - name: Verify performance metrics
+          ansible.builtin.include_role:
+            name: monitoring
+            tasks_from: verify_performance.yml
+          vars:
+            min_performance: "{{ performance_threshold }}"
+      tags:
+        - verification
+        - health
+
+    - name: Progressive traffic migration
+      block:
+        - name: Migrate traffic to blue environment
+          ansible.builtin.command:
+            cmd: "guardian-traffic migrate --to blue --progressive"
+          when: blue_green_enabled | bool
+
+        - name: Verify blue environment stability
+          ansible.builtin.command:
+            cmd: "guardian-health-check --env blue --extended"
+          when: blue_green_enabled | bool
+      tags:
+        - deploy
+        - migration
+
+  handlers:
+    - name: verify_update_status
+      block:
+        - name: Check update status
+          ansible.builtin.command:
+            cmd: "guardian-status check --timeout {{ health_check_timeout }}"
+          register: status_check
+          failed_when: status_check.rc != 0
+
+        - name: Trigger rollback on failure
+          ansible.builtin.command:
+            cmd: "guardian-rollback pre-update --verify-state"
+          when: status_check.rc != 0 and rollback_on_failure | bool
+
+    - name: cleanup_old_environment
+      ansible.builtin.command:
+        cmd: "guardian-deploy cleanup --env green"
+      when: blue_green_enabled | bool
+
+  post_tasks:
+    - name: Update monitoring configuration
+      ansible.builtin.include_role:
+        name: monitoring
+        tasks_from: update.yml
+      tags:
+        - monitoring
+        - post_update
+
+    - name: Generate update report
+      ansible.builtin.template:
+        src: update_report.j2
+        dest: "/var/log/guardian/updates/{{ ansible_date_time.iso8601 }}_update_report.json"
+        mode: '0600'
+      tags:
+        - reporting
+        - post_update
