@@ -1,0 +1,92 @@
+# Kibana v8.11.0 Production Configuration
+# Core server settings
+server.name: guardian-kibana
+server.host: "0.0.0.0"
+server.port: 5601
+
+# Elasticsearch connection settings
+elasticsearch.hosts: ["https://elasticsearch:9200"]
+elasticsearch.ssl.verificationMode: certificate
+elasticsearch.username: "${ELASTICSEARCH_USERNAME}"
+elasticsearch.password: "${ELASTICSEARCH_PASSWORD}"
+
+# Security settings (x-pack v8.11.0)
+xpack.security.enabled: true
+xpack.security.encryptionKey: "${KIBANA_ENCRYPTION_KEY}"
+xpack.security.session.idleTimeout: "1h"
+xpack.security.session.lifespan: "24h"
+
+# Security audit settings
+xpack.security.audit.enabled: true
+xpack.security.audit.appender.type: json_file
+xpack.security.audit.appender.path: /var/log/kibana/audit.json
+xpack.security.audit.ignore_filters.actions:
+  - access:login
+  - access:logout
+
+# Authentication providers
+xpack.security.authc.providers:
+  - basic
+  - saml
+  - token
+xpack.security.authc.selector.enabled: true
+
+# SSL/TLS configuration
+server.ssl.enabled: true
+server.ssl.certificate: "${KIBANA_CERT_PATH}"
+server.ssl.key: "${KIBANA_KEY_PATH}"
+server.ssl.certificateAuthorities: ["${KIBANA_CA_PATH}"]
+server.ssl.supportedProtocols: ["TLSv1.2", "TLSv1.3"]
+server.ssl.cipherSuites:
+  - ECDHE-ECDSA-AES256-GCM-SHA384
+  - ECDHE-RSA-AES256-GCM-SHA384
+
+# Monitoring settings
+monitoring.ui.container.elasticsearch.enabled: true
+monitoring.ui.container.logstash.enabled: false
+xpack.monitoring.collection.enabled: true
+xpack.monitoring.collection.interval: "10s"
+xpack.monitoring.min_interval_seconds: 10
+xpack.monitoring.elasticsearch.collection.enabled: true
+xpack.monitoring.kibana.collection.enabled: true
+xpack.monitoring.max_bucket_size: 10000
+
+# Index patterns configuration
+kibana.index_patterns:
+  - name: "guardian-system-*"
+    default: true
+    timeFieldName: "@timestamp"
+    refreshInterval: "5s"
+  - name: "guardian-security-*"
+    timeFieldName: "@timestamp"
+    refreshInterval: "3s"
+  - name: "guardian-ml-*"
+    timeFieldName: "@timestamp"
+    refreshInterval: "10s"
+
+# Dashboard settings
+dashboard.defaultDarkMode: true
+dashboard.hideWriteControls: false
+dashboard.allowEditing: true
+dashboard.refreshInterval: "5s"
+dashboard.maxVisibleRows: 1000
+dashboard.preserveDrawingBuffer: true
+dashboard.usageCollectors.enabled: true
+
+# Performance and resource limits
+ops.interval: 5000
+cpu.cgroup.path.override: "/"
+cpuacct.cgroup.path.override: "/"
+elasticsearch.pingTimeout: 3000
+elasticsearch.requestTimeout: 30000
+elasticsearch.shardTimeout: 30000
+elasticsearch.maxRetries: 3
+elasticsearch.sniffOnStart: true
+elasticsearch.sniffInterval: 60000
+elasticsearch.compression: true
+
+# Logging configuration
+logging.json: true
+logging.rotate.enabled: true
+logging.rotate.keepFiles: 7
+logging.rotate.size: "100mb"
