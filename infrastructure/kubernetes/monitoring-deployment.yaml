@@ -1,0 +1,132 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: guardian-monitoring
+  namespace: guardian-system
+  labels:
+    app.kubernetes.io/name: guardian-monitoring
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: ai-guardian
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: guardian-monitoring
+      app.kubernetes.io/component: monitoring
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: guardian-monitoring
+        app.kubernetes.io/component: monitoring
+        app.kubernetes.io/part-of: ai-guardian
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      # Security context for running containers as non-root
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534  # nobody user
+        fsGroup: 65534    # nobody group
+      
+      containers:
+      # Prometheus container for metrics collection
+      - name: prometheus
+        image: prom/prometheus:v2.45.0  # Version pinned for stability
+        ports:
+        - containerPort: 9090
+          protocol: TCP
+        volumeMounts:
+        - name: prometheus-config
+          mountPath: /etc/prometheus
+        - name: prometheus-data
+          mountPath: /prometheus
+        resources:
+          requests:
+            cpu: "500m"    # 0.5 CPU cores
+            memory: "1Gi"  # 1GB memory
+          limits:
+            cpu: "1"       # 1 CPU core
+            memory: "2Gi"  # 2GB memory
+        livenessProbe:
+          httpGet:
+            path: /-/healthy
+            port: 9090
+          initialDelaySeconds: 30
+          periodSeconds: 10
+
+      # Grafana container for visualization
+      - name: grafana
+        image: grafana/grafana:9.5.0  # Version pinned for stability
+        ports:
+        - containerPort: 3000
+          protocol: TCP
+        volumeMounts:
+        - name: grafana-config
+          mountPath: /etc/grafana
+        - name: grafana-data
+          mountPath: /var/lib/grafana
+        resources:
+          requests:
+            cpu: "200m"     # 0.2 CPU cores
+            memory: "512Mi" # 512MB memory
+          limits:
+            cpu: "500m"     # 0.5 CPU cores
+            memory: "1Gi"   # 1GB memory
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 60
+          periodSeconds: 10
+
+      # AlertManager container for alert handling
+      - name: alertmanager
+        image: prom/alertmanager:v0.25.0  # Version pinned for stability
+        ports:
+        - containerPort: 9093
+          protocol: TCP
+        volumeMounts:
+        - name: alertmanager-config
+          mountPath: /etc/alertmanager
+        - name: alertmanager-data
+          mountPath: /alertmanager
+        resources:
+          requests:
+            cpu: "100m"     # 0.1 CPU cores
+            memory: "256Mi" # 256MB memory
+          limits:
+            cpu: "200m"     # 0.2 CPU cores
+            memory: "512Mi" # 512MB memory
+        livenessProbe:
+          httpGet:
+            path: /-/healthy
+            port: 9093
+          initialDelaySeconds: 30
+          periodSeconds: 10
+
+      # Volume definitions
+      volumes:
+      # Prometheus configuration and data volumes
+      - name: prometheus-config
+        configMap:
+          name: prometheus-config
+      - name: prometheus-data
+        persistentVolumeClaim:
+          claimName: prometheus-data
+
+      # Grafana configuration and data volumes  
+      - name: grafana-config
+        configMap:
+          name: grafana-config
+      - name: grafana-data
+        persistentVolumeClaim:
+          claimName: grafana-data
+
+      # AlertManager configuration and data volumes
+      - name: alertmanager-config
+        configMap:
+          name: alertmanager-config
+      - name: alertmanager-data
+        persistentVolumeClaim:
+          claimName: alertmanager-data
