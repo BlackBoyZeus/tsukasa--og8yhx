@@ -1,0 +1,32 @@
+# This file defines code ownership and required reviewers for different components
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners for any unlisted files to ensure complete coverage
+*                               @guardian/maintainers
+
+# Core backend components including service implementations
+src/backend/src/core/*          @guardian/core-team
+
+# Security components including threat detection and response
+src/backend/src/security/*      @guardian/security-team
+
+# Machine learning components including models and training pipelines  
+src/backend/src/ml/*            @guardian/ml-team
+
+# FreeBSD kernel-level components
+src/freebsd/src/kernel/*        @guardian/system-team
+
+# Kernel security components require dual review
+src/freebsd/src/security/*      @guardian/security-team @guardian/system-team
+
+# Infrastructure components including deployment configurations
+infrastructure/*                @guardian/devops-team
+
+# GitHub-specific configurations and workflows
+.github/*                       @guardian/maintainers
+
+# Protocol buffer service interface definitions
+*.proto                         @guardian/api-team
+
+# Test files require QA team review
+src/backend/tests/*             @guardian/qa-team
