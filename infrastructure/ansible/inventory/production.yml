@@ -1,0 +1,113 @@
+---
+# AI Guardian Production Environment Inventory
+# Version: 1.0.0
+# Ansible Core Version: 2.15+
+# Last Updated: 2024
+
+all:
+  vars:
+    ansible_python_interpreter: /usr/local/bin/python3
+    ansible_connection: ssh
+    ansible_ssh_common_args: -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/ssh/known_hosts
+    ansible_become_method: sudo
+    ansible_become: true
+
+gaming_consoles:
+  vars:
+    ansible_user: guardian_admin
+    freebsd_version: "13.2"
+    environment: production
+    security_level: high
+    audit_enabled: true
+    tls_version: "1.3"
+    cipher_suite: TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+    security_config:
+      audit_level: high
+      mac_policies: 
+        - biba
+        - mls
+      capsicum_services:
+        - guardian-core
+        - ml-engine
+      kernel_hardening:
+        security.bsd.hardening: 1
+        kern.randompid: 1
+        security.bsd.see_other_uids: 0
+        security.bsd.see_other_gids: 0
+        security.bsd.unprivileged_read_msgbuf: 0
+    monitoring_config:
+      prometheus_retention: 15d
+      prometheus_storage_size: 50G
+      alertmanager_retention: 5d
+      grafana_plugins:
+        - grafana-piechart-panel
+        - grafana-clock-panel
+      alert_rules_path: /etc/prometheus/rules
+    system_config:
+      timezone: UTC
+      locale: en_US.UTF-8
+      sysctl_params:
+        kern.ipc.somaxconn: 4096
+        kern.ipc.maxsockbuf: 2097152
+        kern.maxfiles: 200000
+
+  children:
+    core_services:
+      vars:
+        guardian_role: core
+        min_memory: 8G
+        min_cpu_cores: 4
+        capsicum_enabled: true
+        mac_policy:
+          - biba
+          - mls
+        jail_parameters:
+          allow_raw_sockets: false
+          allow_socket_af: false
+          securelevel: 2
+      hosts:
+        guardian-core-[01:04]:
+          ansible_host: "10.0.1.[11:14]"
+
+    ml_engines:
+      vars:
+        guardian_role: ml
+        min_memory: 16G
+        min_cpu_cores: 8
+        gpu_required: true
+        gpu_memory: 8G
+        model_cache_size: 4G
+        inference_threads: 4
+        cuda_version: "11.8"
+      hosts:
+        guardian-ml-[01:02]:
+          ansible_host: "10.0.2.[11:12]"
+
+    storage_nodes:
+      vars:
+        guardian_role: storage
+        min_storage: 100G
+        zfs_encryption: true
+        geli_enabled: true
+        zfs_compression: lz4
+        zfs_atime: "off"
+        zfs_redundancy: raidz2
+        backup_retention: 30d
+      hosts:
+        guardian-storage-[01:02]:
+          ansible_host: "10.0.3.[11:12]"
+
+    monitoring_nodes:
+      vars:
+        guardian_role: monitoring
+        min_memory: 4G
+        min_storage: 50G
+        metrics_retention: 30d
+        prometheus_version: v2.45.0
+        grafana_version: 9.5.0
+        alertmanager_version: v0.25.0
+        scrape_interval: 15s
+        evaluation_interval: 15s
+      hosts:
+        guardian-monitor-[01:02]:
+          ansible_host: "10.0.4.[11:12]"
