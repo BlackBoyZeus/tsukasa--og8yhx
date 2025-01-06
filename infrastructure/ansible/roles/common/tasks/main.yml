@@ -1,0 +1,141 @@
+---
+# Ansible tasks for AI Guardian base system configuration
+# Version requirements:
+# - ansible-core: 2.15+
+# - ansible-posix: 1.5+
+# - community.general: 7.0+
+
+- name: Update package repositories
+  pkgng:
+    update_cache: yes
+  become: true
+  tags:
+    - packages
+    - system
+
+- name: Install base system packages
+  pkgng:
+    name: "{{ system_packages }}"
+    state: present
+  become: true
+  tags:
+    - packages
+    - system
+
+- name: Create ZFS storage pool for Guardian
+  zfs:
+    name: "{{ zfs_config.pool_name }}"
+    state: present
+    extra_zfs_properties:
+      encryption: "{{ zfs_config.encryption }}"
+      compression: "{{ zfs_config.compression }}"
+      atime: "{{ zfs_config.atime }}"
+      xattr: "{{ zfs_config.xattr }}"
+      recordsize: "{{ zfs_config.recordsize }}"
+  become: true
+  tags:
+    - storage
+    - security
+
+- name: Configure kernel security parameters
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_set: yes
+    sysctl_file: /etc/sysctl.conf
+  with_dict: "{{ kernel_params }}"
+  become: true
+  tags:
+    - security
+    - kernel
+
+- name: Configure system resource limits
+  pam_limits:
+    domain: guardian
+    limit_type: "{{ item.type }}"
+    limit_item: "{{ item.item }}"
+    value: "{{ item.value }}"
+  with_items:
+    - { type: 'soft', item: 'nofile', value: "{{ resource_limits.nofile_soft }}" }
+    - { type: 'hard', item: 'nofile', value: "{{ resource_limits.nofile_hard }}" }
+    - { type: 'soft', item: 'nproc', value: "{{ resource_limits.nproc_soft }}" }
+    - { type: 'hard', item: 'nproc', value: "{{ resource_limits.nproc_hard }}" }
+  become: true
+  tags:
+    - security
+    - resources
+
+- name: Create Guardian system user
+  user:
+    name: guardian
+    system: yes
+    shell: /usr/local/bin/bash
+    home: /var/guardian
+    create_home: yes
+  become: true
+  tags:
+    - security
+    - users
+
+- name: Set secure permissions on Guardian home directory
+  file:
+    path: /var/guardian
+    state: directory
+    owner: guardian
+    group: guardian
+    mode: '0750'
+  become: true
+  tags:
+    - security
+    - users
+
+- name: Configure Guardian service
+  template:
+    src: guardian.rc.j2
+    dest: /usr/local/etc/rc.d/guardian
+    mode: '0755'
+    owner: root
+    group: wheel
+  become: true
+  notify: restart_guardian
+  tags:
+    - services
+    - system
+
+- name: Enable Guardian service
+  service:
+    name: guardian
+    enabled: yes
+  become: true
+  tags:
+    - services
+    - system
+
+- name: Configure system monitoring
+  template:
+    src: monitoring.conf.j2
+    dest: /usr/local/etc/guardian/monitoring.conf
+    mode: '0640'
+    owner: guardian
+    group: guardian
+  become: true
+  notify: restart_guardian
+  tags:
+    - monitoring
+    - configuration
+
+- name: Setup audit logging
+  command: audit -n
+  become: true
+  changed_when: false
+  tags:
+    - security
+    - audit
+
+handlers:
+  - name: restart_guardian
+    service:
+      name: guardian
+      state: restarted
+    become: true
