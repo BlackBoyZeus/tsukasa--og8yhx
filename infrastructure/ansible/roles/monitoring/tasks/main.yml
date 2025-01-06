@@ -1,0 +1,172 @@
+---
+# AI Guardian Monitoring Stack Deployment Tasks
+# Version: 1.0.0
+# Purpose: Deploy and configure monitoring stack with enhanced security and ML monitoring
+
+- name: Create monitoring directory structure with secure permissions
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0750'
+    owner: guardian
+    group: guardian
+  with_items:
+    - "{{ monitoring_base_dir }}"
+    - "{{ monitoring_base_dir }}/prometheus"
+    - "{{ monitoring_base_dir }}/grafana"
+    - "{{ monitoring_base_dir }}/alertmanager"
+    - "{{ monitoring_base_dir }}/certs"
+    - "{{ monitoring_base_dir }}/rules"
+
+- name: Deploy TLS certificates for secure communication
+  copy:
+    src: "{{ item.src }}"
+    dest: "{{ monitoring_base_dir }}/certs/{{ item.dest }}"
+    mode: '0600'
+    owner: guardian
+    group: guardian
+  with_items:
+    - { src: "{{ security_config_path }}/certs/prometheus.crt", dest: "prometheus.crt" }
+    - { src: "{{ security_config_path }}/certs/prometheus.key", dest: "prometheus.key" }
+    - { src: "{{ security_config_path }}/certs/grafana.crt", dest: "grafana.crt" }
+    - { src: "{{ security_config_path }}/certs/grafana.key", dest: "grafana.key" }
+    - { src: "{{ security_config_path }}/certs/alertmanager.crt", dest: "alertmanager.crt" }
+    - { src: "{{ security_config_path }}/certs/alertmanager.key", dest: "alertmanager.key" }
+    - { src: "{{ security_config_path }}/certs/ca.crt", dest: "ca.crt" }
+
+- name: Deploy Prometheus configuration with security enhancements
+  template:
+    src: prometheus.yml.j2
+    dest: "{{ monitoring_base_dir }}/prometheus/prometheus.yml"
+    mode: '0640'
+    owner: guardian
+    group: guardian
+  notify: restart prometheus
+
+- name: Deploy Grafana configuration with security settings
+  template:
+    src: grafana.json.j2
+    dest: "{{ monitoring_base_dir }}/grafana/grafana.json"
+    mode: '0640'
+    owner: guardian
+    group: guardian
+  notify: restart grafana
+
+- name: Deploy AlertManager configuration with enhanced routing
+  template:
+    src: alertmanager.yml.j2
+    dest: "{{ monitoring_base_dir }}/alertmanager/alertmanager.yml"
+    mode: '0640'
+    owner: guardian
+    group: guardian
+  notify: restart alertmanager
+
+- name: Deploy Prometheus security rules
+  copy:
+    src: "{{ item }}"
+    dest: "{{ monitoring_base_dir }}/rules/"
+    mode: '0640'
+    owner: guardian
+    group: guardian
+  with_fileglob:
+    - "rules/*.rules"
+  notify: reload prometheus
+
+- name: Deploy Prometheus container with security context
+  docker_container:
+    name: prometheus
+    image: "prom/prometheus:{{ prometheus_version }}"
+    state: started
+    restart_policy: unless-stopped
+    volumes:
+      - "{{ monitoring_base_dir }}/prometheus:/etc/prometheus:ro"
+      - "{{ monitoring_base_dir }}/certs:/etc/prometheus/certs:ro"
+      - "{{ monitoring_base_dir }}/rules:/etc/prometheus/rules:ro"
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    user: guardian
+    security_opts:
+      - no-new-privileges:true
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.console.libraries=/usr/share/prometheus/console_libraries
+      - --web.console.templates=/usr/share/prometheus/consoles
+      - --web.external-url=https://prometheus.guardian.local
+      - --web.enable-admin-api=false
+      - --web.enable-lifecycle
+
+- name: Deploy Grafana container with security context
+  docker_container:
+    name: grafana
+    image: "grafana/grafana:{{ grafana_version }}"
+    state: started
+    restart_policy: unless-stopped
+    volumes:
+      - "{{ monitoring_base_dir }}/grafana:/etc/grafana:ro"
+      - "{{ monitoring_base_dir }}/certs:/etc/grafana/certs:ro"
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    user: guardian
+    security_opts:
+      - no-new-privileges:true
+    env:
+      GF_SECURITY_ADMIN_PASSWORD: "{{ grafana_admin_password }}"
+      GF_SERVER_ROOT_URL: "https://grafana.guardian.local"
+      GF_SECURITY_ALLOW_EMBEDDING: "false"
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_SECURITY_STRICT_TRANSPORT_SECURITY: "true"
+
+- name: Deploy AlertManager container with security context
+  docker_container:
+    name: alertmanager
+    image: "prom/alertmanager:{{ alertmanager_version }}"
+    state: started
+    restart_policy: unless-stopped
+    volumes:
+      - "{{ monitoring_base_dir }}/alertmanager:/etc/alertmanager:ro"
+      - "{{ monitoring_base_dir }}/certs:/etc/alertmanager/certs:ro"
+      - alertmanager_data:/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+    user: guardian
+    security_opts:
+      - no-new-privileges:true
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.external-url=https://alertmanager.guardian.local
+
+- name: Configure ML monitoring targets
+  template:
+    src: ml_targets.yml.j2
+    dest: "{{ monitoring_base_dir }}/prometheus/ml_targets.yml"
+    mode: '0640'
+    owner: guardian
+    group: guardian
+  notify: reload prometheus
+
+- name: Verify monitoring stack deployment
+  uri:
+    url: "{{ item.url }}"
+    validate_certs: yes
+    client_cert: "{{ monitoring_base_dir }}/certs/{{ item.cert }}"
+    client_key: "{{ monitoring_base_dir }}/certs/{{ item.key }}"
+    status_code: 200
+  with_items:
+    - { url: "https://prometheus.guardian.local/-/healthy", cert: "prometheus.crt", key: "prometheus.key" }
+    - { url: "https://grafana.guardian.local/api/health", cert: "grafana.crt", key: "grafana.key" }
+    - { url: "https://alertmanager.guardian.local/-/healthy", cert: "alertmanager.crt", key: "alertmanager.key" }
+  register: monitoring_health_check
+
+- name: Set monitoring stack status
+  set_fact:
+    monitoring_status:
+      prometheus_status: "{{ monitoring_health_check.results[0].status }}"
+      grafana_status: "{{ monitoring_health_check.results[1].status }}"
+      alertmanager_status: "{{ monitoring_health_check.results[2].status }}"
+      security_status: "enabled"
+      ml_monitoring_status: "configured"
