@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: guardian-backend
+  namespace: guardian-system
+  labels:
+    app: guardian
+    component: backend
+    version: 1.0.0
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: guardian
+      component: backend
+  template:
+    metadata:
+      labels:
+        app: guardian
+        component: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: guardian-backend-sa
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        runAsNonRoot: true
+        readOnlyRootFilesystem: true
+      containers:
+      - name: guardian-backend
+        image: guardian-backend:1.0.0
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        - name: grpc
+          containerPort: 9090
+          protocol: TCP
+        resources:
+          requests:
+            cpu: "1000m"
+            memory: "2Gi"
+          limits:
+            cpu: "2000m"
+            memory: "4Gi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        volumeMounts:
+        - name: config
+          mountPath: /etc/guardian/config
+          readOnly: true
+        - name: secrets
+          mountPath: /etc/guardian/secrets
+          readOnly: true
+        - name: temporal-certs
+          mountPath: /etc/guardian/temporal
+          readOnly: true
+        env:
+        - name: RUST_LOG
+          value: "info"
+        - name: APP_ENV
+          value: "production"
+      volumes:
+      - name: config
+        configMap:
+          name: guardian-app-config
+      - name: secrets
+        secret:
+          secretName: guardian-secrets
+      - name: temporal-certs
+        secret:
+          secretName: temporal-secrets
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: guardian
+                  component: backend
+              topologyKey: kubernetes.io/hostname
