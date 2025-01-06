@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: guardian-app-config
+  namespace: guardian-system
+data:
+  app.yaml: |
+    app_name: AI Guardian
+    version: 1.0.0
+    environment: production
+    log_level: info
+    max_threads: 16
+    request_timeout: 30
+    max_memory: 4Gi
+    health_check:
+      enabled: true
+      interval: 30s
+      timeout: 5s
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: guardian-temporal-config
+  namespace: guardian-system
+data:
+  temporal.yaml: |
+    namespace: guardian
+    persistence:
+      default_store: postgresql
+      visibility_store: elasticsearch
+    global:
+      membership:
+        max_join_duration: 30s
+        broadcast_address: temporal-frontend
+      metrics:
+        prometheus:
+          port: 7234
+          path: /metrics
+          reporting_interval: 1m
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: guardian-security-config
+  namespace: guardian-system
+data:
+  security.yaml: |
+    audit_level: high
+    mac_policy: strict
+    capsicum_enabled: true
+    geli_encryption: true
+    jail_isolation: true
+    rbac:
+      enabled: true
+      default_role: readonly
+    monitoring:
+      intrusion_detection: true
+      audit_log_retention: 90d
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: guardian-ml-config
+  namespace: guardian-system
+data:
+  ml.yaml: |
+    model_registry: /models
+    inference_threads: 4
+    feature_cache_size: 1Gi
+    model_update_interval: 24h
+    burn_config:
+      backend: candle
+      precision: fp16
+      device: cpu
+      optimization_level: 3
+    training:
+      batch_size: 32
+      epochs: 100
+      learning_rate: 0.001
