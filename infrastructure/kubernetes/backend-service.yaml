@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: guardian-backend-service
+  namespace: guardian-system
+  labels:
+    app: guardian
+    component: backend
+    version: 1.0.0
+    tier: backend
+    environment: production
+    managed-by: kubernetes
+    part-of: ai-guardian
+  annotations:
+    # Prometheus monitoring configuration
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+    
+    # AWS Load Balancer configuration
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    
+    # Custom monitoring annotations
+    monitoring.guardian.io/enable: "true"
+    monitoring.guardian.io/port: "8080"
+    monitoring.guardian.io/scrape-interval: "15s"
+
+spec:
+  type: ClusterIP
+  selector:
+    app: guardian
+    component: backend
+    tier: backend
+  
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
+    
+    - name: grpc
+      protocol: TCP 
+      port: 9090
+      targetPort: 9090
+    
+    - name: metrics
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
+
+  # Session affinity configuration for stable connections
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800  # 3 hour timeout
+  
+  # Only publish ready pods
+  publishNotReadyAddresses: false
+  
+  # Topology aware routing configuration
+  topologyKeys:
+    - "kubernetes.io/hostname"
+    - "topology.kubernetes.io/zone" 
+    - "topology.kubernetes.io/region"
+    - "*"
