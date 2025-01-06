@@ -1,0 +1,128 @@
+# Prometheus Configuration for AI Guardian System
+# Version: v2.45.0
+# Purpose: Enterprise monitoring configuration with enhanced security and performance optimizations
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    monitor: ai-guardian-monitor
+    environment: ${ENV}
+    region: ${REGION}
+    instance_group: ${INSTANCE_GROUP}
+
+# Recording and alerting rules
+rule_files:
+  - /etc/prometheus/rules/recording.rules
+  - /etc/prometheus/rules/alerting.rules
+  - /etc/prometheus/rules/security.rules
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+          labels:
+            cluster: primary
+      timeout: 5s
+      api_version: v2
+
+# Scrape configurations for AI Guardian components
+scrape_configs:
+  # Guardian Core metrics
+  - job_name: guardian-core
+    metrics_path: /metrics
+    scheme: https
+    tls_config:
+      cert_file: /etc/prometheus/certs/prometheus.crt
+      key_file: /etc/prometheus/certs/prometheus.key
+      ca_file: /etc/prometheus/certs/ca.crt
+      server_name: guardian-core
+      min_version: TLS13
+    static_configs:
+      - targets: ['guardian-core:9090']
+    metric_relabel_configs:
+      - source_labels: ['__name__']
+        regex: 'guardian_core_.+'
+        action: keep
+
+  # ML Engine metrics
+  - job_name: ml-engine
+    metrics_path: /metrics
+    scheme: https
+    tls_config:
+      cert_file: /etc/prometheus/certs/prometheus.crt
+      key_file: /etc/prometheus/certs/prometheus.key
+      ca_file: /etc/prometheus/certs/ca.crt
+      server_name: ml-engine
+      min_version: TLS13
+    static_configs:
+      - targets: ['ml-engine:9091']
+    metric_relabel_configs:
+      - source_labels: ['__name__']
+        regex: 'ml_engine_.+'
+        action: keep
+
+  # Security monitoring metrics
+  - job_name: security-monitor
+    metrics_path: /metrics
+    scheme: https
+    tls_config:
+      cert_file: /etc/prometheus/certs/prometheus.crt
+      key_file: /etc/prometheus/certs/prometheus.key
+      ca_file: /etc/prometheus/certs/ca.crt
+      server_name: security-monitor
+      min_version: TLS13
+    static_configs:
+      - targets: ['security-monitor:9092']
+    metric_relabel_configs:
+      - source_labels: ['__name__']
+        regex: 'security_.+'
+        action: keep
+
+  # System resource metrics
+  - job_name: system-metrics
+    metrics_path: /metrics
+    scheme: https
+    tls_config:
+      cert_file: /etc/prometheus/certs/prometheus.crt
+      key_file: /etc/prometheus/certs/prometheus.key
+      ca_file: /etc/prometheus/certs/ca.crt
+      server_name: system-metrics
+      min_version: TLS13
+    static_configs:
+      - targets: ['system-metrics:9093']
+    metric_relabel_configs:
+      - source_labels: ['__name__']
+        regex: 'system_.+'
+        action: keep
+
+# Storage configuration
+storage:
+  tsdb:
+    retention_time: 15d
+    retention_size: 50GB
+    min_block_duration: 2h
+    max_block_duration: 24h
+    no_lockfile: false
+    wal_compression: true
+    allow_overlapping_blocks: false
+
+# Security settings
+tls_server_config:
+  cert_file: /etc/prometheus/certs/prometheus.crt
+  key_file: /etc/prometheus/certs/prometheus.key
+  client_auth_type: RequireAndVerifyClientCert
+  client_ca_file: /etc/prometheus/certs/ca.crt
+  min_version: TLS13
+  cipher_suites:
+    - TLS_AES_128_GCM_SHA256
+    - TLS_AES_256_GCM_SHA384
+
+# Web interface configuration
+web:
+  cors_origin: ['https://grafana.ai-guardian.local']
+  max_connections: 512
+  read_timeout: 30s
+  max_request_size: 10MB
