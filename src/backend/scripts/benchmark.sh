@@ -1,222 +1,268 @@
 #!/usr/bin/env bash
 
-# Guardian System Benchmark Script
+# AI Guardian System Benchmark Script
 # Version: 1.0.0
-# Executes comprehensive performance benchmarks across all system components
+# Validates performance metrics, resource utilization, and security requirements
 
 set -euo pipefail
 IFS=$'\n\t'
 
-# Global configuration
-BENCH_RESULTS_DIR="${PWD}/benchmark_results"
-CRITERION_CONFIG="${PWD}/.criterion"
-BENCH_TIMEOUT=3600
-LOG_LEVEL="info"
-JAIL_NAME="guardian_bench"
-GPU_DEVICE="/dev/nvidia0"
-HSM_CONFIG="${PWD}/hsm.conf"
+# Global constants
+readonly BENCH_ITERATIONS=1000
+readonly WARMUP_ITERATIONS=100
+readonly REPORT_DIR="./target/criterion/reports"
+readonly PERF_THRESHOLDS="./config/benchmark_thresholds.json"
+readonly RESOURCE_LIMITS="./config/resource_limits.json"
 
-# Ensure benchmark environment is clean
-cleanup() {
-    echo "Cleaning up benchmark environment..."
-    
-    # Remove benchmark jail if exists
-    if jls | grep -q "${JAIL_NAME}"; then
-        jail -r "${JAIL_NAME}"
-    fi
+# Required tools
+readonly REQUIRED_TOOLS=(
+    "cargo"
+    "criterion"
+    "hyperfine"
+    "sar"
+    "nvidia-smi"
+)
 
-    # Clear GPU memory
-    if [ -e "${GPU_DEVICE}" ]; then
-        nvidia-smi --gpu-reset
-    fi
-
-    # Reset HSM state
-    if [ -f "${HSM_CONFIG}" ]; then
-        pkcs11-tool --module="${HSM_CONFIG}" --login --reset
-    fi
-
-    # Clean criterion artifacts
-    if [ -d "${CRITERION_CONFIG}" ]; then
-        rm -rf "${CRITERION_CONFIG}"
-    fi
-
-    # Reset system counters
-    sysctl kern.cp_time=0
-
-    echo "Cleanup completed"
-}
-
-# Set up isolated benchmark environment
-setup_benchmark_env() {
+# Setup environment and validate dependencies
+setup_environment() {
     echo "Setting up benchmark environment..."
+    
+    # Check required tools
+    for tool in "${REQUIRED_TOOLS[@]}"; do
+        if ! command -v "$tool" &> /dev/null; then
+            echo "Error: Required tool '$tool' not found"
+            return 1
+        fi
+    done
 
-    # Create results directory
-    mkdir -p "${BENCH_RESULTS_DIR}"
+    # Create report directory
+    mkdir -p "$REPORT_DIR"/{security,ml,storage}
 
-    # Create isolated jail for benchmarking
-    cat > /etc/jail.conf.d/benchmark.conf << EOF
-${JAIL_NAME} {
-    path = "/usr/jail/${JAIL_NAME}";
-    mount.devfs;
-    allow.raw_sockets;
-    allow.sysvipc;
-    exec.start = "/bin/sh /etc/rc";
-    exec.stop = "/bin/sh /etc/rc.shutdown";
-    persist;
-}
-EOF
-
-    # Initialize jail
-    jail -c "${JAIL_NAME}"
-
-    # Configure resource limits
-    rctl -a jail:${JAIL_NAME}:vmemoryuse:deny=4G
-    rctl -a jail:${JAIL_NAME}:pcpu:deny=80
-    rctl -a jail:${JAIL_NAME}:maxproc:deny=1000
-
-    # Set up performance counters
-    sysctl kern.cp_times=1
-    sysctl kern.timecounter.hardware=HPET
-
-    # Initialize criterion config
-    mkdir -p "${CRITERION_CONFIG}"
-    cat > "${CRITERION_CONFIG}/criterion.toml" << EOF
-sample_size = 100
-measurement_time = 10
-warm_up_time = 3
-confidence_level = 0.95
-significance_level = 0.05
-noise_threshold = 0.01
-EOF
-
-    echo "Benchmark environment ready"
-}
-
-# Execute security benchmarks
-run_security_benchmarks() {
-    echo "Running security benchmarks..."
-
-    # Run security component benchmarks
-    cargo bench --bench security_bench -- \
-        --verbose \
-        --color always \
-        --measurement-time 30 \
-        --sample-size 100 \
-        --output "${BENCH_RESULTS_DIR}/security"
-
-    # Validate results
-    if [ $? -ne 0 ]; then
-        echo "Security benchmarks failed"
+    # Load performance thresholds
+    if [[ ! -f "$PERF_THRESHOLDS" ]]; then
+        echo "Error: Performance thresholds file not found"
         return 1
     fi
 
-    echo "Security benchmarks completed"
-}
-
-# Execute ML benchmarks
-run_ml_benchmarks() {
-    echo "Running ML benchmarks..."
+    # Initialize resource monitoring
+    sar -o "$REPORT_DIR/system_metrics.sar" 1 > /dev/null 2>&1 &
+    SAR_PID=$!
 
     # Check GPU availability
-    if [ -e "${GPU_DEVICE}" ]; then
-        export CUDA_VISIBLE_DEVICES=0
-    else
-        export CUDA_VISIBLE_DEVICES=""
+    if command -v nvidia-smi &> /dev/null; then
+        nvidia-smi -pm 1 > /dev/null 2>&1 || true
     fi
 
-    # Run ML component benchmarks
-    cargo bench --bench ml_bench -- \
-        --verbose \
-        --color always \
-        --measurement-time 30 \
-        --sample-size 100 \
-        --output "${BENCH_RESULTS_DIR}/ml"
-
-    # Validate results
-    if [ $? -ne 0 ]; then
-        echo "ML benchmarks failed"
-        return 1
-    fi
-
-    echo "ML benchmarks completed"
+    return 0
 }
 
-# Execute storage benchmarks
-run_storage_benchmarks() {
-    echo "Running storage benchmarks..."
-
-    # Run storage component benchmarks
-    cargo bench --bench storage_bench -- \
-        --verbose \
-        --color always \
+# Run security benchmarks
+run_security_benchmarks() {
+    echo "Running security benchmarks..."
+    
+    # Start resource monitoring
+    local start_time=$(date +%s)
+    
+    # Run threat detection benchmarks
+    cargo bench --bench security_bench -- \
+        --warm-up-time 5 \
         --measurement-time 30 \
-        --sample-size 100 \
-        --output "${BENCH_RESULTS_DIR}/storage"
+        --sample-size "$BENCH_ITERATIONS" \
+        bench_threat_detection \
+        2>&1 | tee "$REPORT_DIR/security/threat_detection.log"
 
-    # Validate results
-    if [ $? -ne 0 ]; then
-        echo "Storage benchmarks failed"
+    # Run anomaly detection benchmarks
+    cargo bench --bench security_bench -- \
+        bench_anomaly_detection \
+        2>&1 | tee "$REPORT_DIR/security/anomaly_detection.log"
+
+    # Run response time benchmarks
+    cargo bench --bench security_bench -- \
+        bench_response_execution \
+        2>&1 | tee "$REPORT_DIR/security/response_time.log"
+
+    # Validate against thresholds
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    
+    # Check if performance meets requirements
+    if ! validate_security_metrics "$REPORT_DIR/security"; then
+        echo "Error: Security benchmarks failed to meet performance requirements"
         return 1
     fi
 
-    echo "Storage benchmarks completed"
+    return 0
+}
+
+# Run ML engine benchmarks
+run_ml_benchmarks() {
+    echo "Running ML engine benchmarks..."
+    
+    # Initialize GPU monitoring if available
+    if command -v nvidia-smi &> /dev/null; then
+        nvidia-smi dmon -i 0 -s u -f "$REPORT_DIR/ml/gpu_metrics.log" &
+        NVIDIA_PID=$!
+    fi
+
+    # Run inference benchmarks
+    cargo bench --bench ml_bench -- \
+        --warm-up-time 5 \
+        --measurement-time 60 \
+        bench_inference \
+        2>&1 | tee "$REPORT_DIR/ml/inference.log"
+
+    # Run batch processing benchmarks
+    cargo bench --bench ml_bench -- \
+        bench_batch_inference \
+        2>&1 | tee "$REPORT_DIR/ml/batch_inference.log"
+
+    # Run GPU acceleration benchmarks if available
+    if command -v nvidia-smi &> /dev/null; then
+        cargo bench --bench ml_bench -- \
+            bench_gpu_acceleration \
+            2>&1 | tee "$REPORT_DIR/ml/gpu_acceleration.log"
+        kill $NVIDIA_PID || true
+    fi
+
+    # Validate ML performance
+    if ! validate_ml_metrics "$REPORT_DIR/ml"; then
+        echo "Error: ML benchmarks failed to meet performance requirements"
+        return 1
+    fi
+
+    return 0
+}
+
+# Run storage system benchmarks
+run_storage_benchmarks() {
+    echo "Running storage system benchmarks..."
+    
+    # Initialize ZFS monitoring
+    zpool iostat -v 1 > "$REPORT_DIR/storage/zfs_metrics.log" &
+    ZFS_PID=$!
+
+    # Run metrics store benchmarks
+    cargo bench --bench storage_bench -- \
+        bench_metrics_store \
+        2>&1 | tee "$REPORT_DIR/storage/metrics_store.log"
+
+    # Run event store benchmarks
+    cargo bench --bench storage_bench -- \
+        bench_event_store \
+        2>&1 | tee "$REPORT_DIR/storage/event_store.log"
+
+    # Run ZFS performance benchmarks
+    cargo bench --bench storage_bench -- \
+        bench_zfs_performance \
+        2>&1 | tee "$REPORT_DIR/storage/zfs_performance.log"
+
+    kill $ZFS_PID || true
+
+    # Validate storage performance
+    if ! validate_storage_metrics "$REPORT_DIR/storage"; then
+        echo "Error: Storage benchmarks failed to meet performance requirements"
+        return 1
+    fi
+
+    return 0
 }
 
 # Generate comprehensive benchmark report
 generate_report() {
     echo "Generating benchmark report..."
-
-    # Aggregate results
-    criterion-report \
-        --input "${BENCH_RESULTS_DIR}" \
-        --output "${BENCH_RESULTS_DIR}/report.html" \
-        --template comprehensive
-
-    # Add system information
+    
+    local report_file="$REPORT_DIR/benchmark_report.html"
+    
+    # Aggregate all metrics
     {
-        echo "System Information:"
-        echo "CPU: $(sysctl -n hw.model)"
-        echo "Memory: $(sysctl -n hw.physmem | awk '{print $1/1024/1024/1024 "GB"}')"
-        echo "OS: $(uname -sr)"
-        if [ -e "${GPU_DEVICE}" ]; then
-            echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
-        fi
-    } >> "${BENCH_RESULTS_DIR}/system_info.txt"
+        echo "<!DOCTYPE html>"
+        echo "<html><head><title>AI Guardian Benchmark Report</title>"
+        echo "<style>body{font-family:sans-serif;max-width:1200px;margin:0 auto;padding:20px}</style>"
+        echo "</head><body>"
+        echo "<h1>AI Guardian Benchmark Report</h1>"
+        echo "<p>Generated: $(date)</p>"
+        
+        # Security metrics
+        echo "<h2>Security Performance</h2>"
+        echo "<pre>"
+        cat "$REPORT_DIR/security/"*.log
+        echo "</pre>"
+        
+        # ML metrics
+        echo "<h2>ML Engine Performance</h2>"
+        echo "<pre>"
+        cat "$REPORT_DIR/ml/"*.log
+        echo "</pre>"
+        
+        # Storage metrics
+        echo "<h2>Storage System Performance</h2>"
+        echo "<pre>"
+        cat "$REPORT_DIR/storage/"*.log
+        echo "</pre>"
+        
+        # System resource utilization
+        echo "<h2>System Resource Utilization</h2>"
+        echo "<pre>"
+        sar -f "$REPORT_DIR/system_metrics.sar"
+        echo "</pre>"
+        
+        echo "</body></html>"
+    } > "$report_file"
 
-    # Generate graphs
-    criterion-plot \
-        --input "${BENCH_RESULTS_DIR}" \
-        --output "${BENCH_RESULTS_DIR}/plots"
+    echo "Report generated: $report_file"
+    return 0
+}
 
-    # Sign report
-    if [ -f "${HSM_CONFIG}" ]; then
-        openssl dgst -sha256 -sign "${HSM_CONFIG}" \
-            -out "${BENCH_RESULTS_DIR}/report.sig" \
-            "${BENCH_RESULTS_DIR}/report.html"
-    fi
-
-    echo "Report generated: ${BENCH_RESULTS_DIR}/report.html"
+# Cleanup resources
+cleanup() {
+    echo "Cleaning up benchmark environment..."
+    
+    # Stop monitoring processes
+    kill $SAR_PID 2>/dev/null || true
+    [[ -n "${NVIDIA_PID:-}" ]] && kill $NVIDIA_PID 2>/dev/null || true
+    [[ -n "${ZFS_PID:-}" ]] && kill $ZFS_PID 2>/dev/null || true
+    
+    # Compress logs
+    find "$REPORT_DIR" -name "*.log" -exec gzip {} \;
+    
+    return 0
 }
 
 # Main execution
 main() {
     # Trap cleanup
     trap cleanup EXIT
-
+    
     # Setup environment
-    setup_benchmark_env
-
-    # Run benchmarks with timeout
-    timeout ${BENCH_TIMEOUT} bash -c '
-        run_security_benchmarks && \
-        run_ml_benchmarks && \
-        run_storage_benchmarks
-    '
-
+    if ! setup_environment; then
+        echo "Failed to setup benchmark environment"
+        exit 1
+    fi
+    
+    # Run benchmarks
+    if ! run_security_benchmarks; then
+        echo "Security benchmarks failed"
+        exit 1
+    fi
+    
+    if ! run_ml_benchmarks; then
+        echo "ML benchmarks failed"
+        exit 1
+    fi
+    
+    if ! run_storage_benchmarks; then
+        echo "Storage benchmarks failed"
+        exit 1
+    fi
+    
     # Generate report
-    generate_report
-
-    echo "Benchmark suite completed successfully"
+    if ! generate_report; then
+        echo "Failed to generate benchmark report"
+        exit 1
+    fi
+    
+    echo "Benchmarks completed successfully"
+    return 0
 }
 
 # Execute main if script is run directly

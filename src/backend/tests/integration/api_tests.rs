@@ -1,263 +1,261 @@
-use std::time::Duration;
-use tokio::time::timeout;
+use std::{sync::Arc, time::Duration};
+use tokio::time;
 use tonic::{Request, Response, Status};
 use mockall::predicate::*;
-use test_context::{AsyncTestContext, test_context};
-use tracing::{info, error};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use metrics::{counter, gauge, histogram};
 
 use crate::api::grpc::{
-    guardian_service::GuardianService,
-    security_service::SecurityService,
-    init_grpc_server,
+    GuardianService,
+    GuardianSecurityService,
+    guardian_proto::{SystemStatus, Event, SecurityResponse},
 };
-use crate::api::{initialize_api, APIConfig};
+use crate::api::ApiConfig;
 use crate::utils::error::GuardianError;
 
 // Test constants
-const TEST_GRPC_PORT: u16 = 50052;
-const TEST_TIMEOUT_MS: u64 = 5000;
-const PERFORMANCE_THRESHOLD_MS: u64 = 100;
-const RESOURCE_USAGE_LIMIT_PERCENT: f32 = 5.0;
-const ERROR_RETRY_COUNT: u32 = 3;
-const CIRCUIT_BREAKER_THRESHOLD: u32 = 5;
+const TEST_TIMEOUT: Duration = Duration::from_secs(5);
+const TEST_CERT_PATH: &str = "test/certs/test.pem";
+const PERFORMANCE_THRESHOLD: Duration = Duration::from_millis(100);
+const RESOURCE_LIMIT: f64 = 5.0;
 
-/// Enhanced test context for API integration tests
+/// Enhanced test context with metrics and service discovery
 #[derive(Debug)]
-struct ApiTestContext {
-    server: TestServer,
-    client: GrpcClient,
-    metrics: MetricsCollector,
-    security_validator: SecurityValidator,
-    resource_monitor: ResourceMonitor,
+struct TestContext {
+    guardian_service: Arc<GuardianService>,
+    security_service: Arc<GuardianSecurityService>,
+    api_config: ApiConfig,
+    metrics_collector: Arc<metrics::MetricsCollector>,
+    circuit_breaker: Arc<CircuitBreaker>,
+    service_discovery: Arc<ServiceDiscovery>,
+    health_checker: Arc<HealthChecker>,
 }
 
-impl ApiTestContext {
-    /// Creates new test context with enhanced monitoring
+impl TestContext {
+    /// Creates a new test context with monitoring
     async fn new(config: TestConfig) -> Result<Self, GuardianError> {
-        // Initialize test server with monitoring
-        let server = setup_test_server(config).await?;
-        
-        // Initialize gRPC client with timeout handling
-        let client = GrpcClient::connect(format!("http://[::1]:{}", TEST_GRPC_PORT))
-            .await
-            .map_err(|e| GuardianError::SystemError(format!("Failed to connect to test server: {}", e)))?;
+        // Initialize metrics collector
+        let metrics_collector = Arc::new(metrics::MetricsCollector::new(
+            metrics::MetricsConfig {
+                statsd_host: "localhost".into(),
+                statsd_port: 8125,
+                buffer_size: Some(1000),
+                flush_interval: Some(Duration::from_secs(1)),
+                sampling_rates: None,
+            },
+        )?);
 
-        // Initialize metrics collection
-        let metrics = MetricsCollector::new();
-        
-        // Initialize security validation
-        let security_validator = SecurityValidator::new();
-        
-        // Initialize resource monitoring
-        let resource_monitor = ResourceMonitor::new(RESOURCE_USAGE_LIMIT_PERCENT);
+        // Initialize circuit breaker
+        let circuit_breaker = Arc::new(CircuitBreaker::new(5));
+
+        // Initialize service discovery
+        let service_discovery = Arc::new(ServiceDiscovery::new(
+            "guardian",
+            vec!["guardian-service", "security-service"],
+        ));
+
+        // Initialize health checker
+        let health_checker = Arc::new(HealthChecker::new(
+            Duration::from_secs(5),
+            metrics_collector.clone(),
+        ));
+
+        // Initialize services
+        let guardian_service = Arc::new(GuardianService::new(
+            Arc::new(Guardian::new(GuardianConfig::default()).await?),
+            Arc::new(RwLock::new(SystemState::default())),
+        )?);
+
+        let security_service = Arc::new(GuardianSecurityService::new(
+            Arc::new(ThreatDetector::new(
+                Arc::new(InferenceEngine::new(
+                    Arc::new(ModelRegistry::new(
+                        Arc::new(ModelStore::new(
+                            Arc::new(ZfsManager::new(
+                                "testpool".to_string(),
+                                vec![0u8; 32],
+                                Arc::new(LogManager::new()),
+                                None,
+                            ).await?),
+                            std::path::PathBuf::from("/tmp/test_models"),
+                            Some(5),
+                        ).await?),
+                    ).await?),
+                ).await?),
+            )),
+            Arc::new(ResponseEngine::new(
+                Arc::new(temporal_sdk::Client::new(
+                    temporal_sdk::ConnectionOptions::default(),
+                ).await?),
+                Arc::new(EventBus::new(
+                    CoreMetricsManager::new(
+                        metrics_collector.clone(),
+                        MetricsConfig::default(),
+                    )?,
+                )?),
+                None,
+            ).await?),
+            SecurityServiceConfig::default(),
+        ));
 
         Ok(Self {
-            server,
-            client,
-            metrics,
-            security_validator,
-            resource_monitor,
+            guardian_service,
+            security_service,
+            api_config: ApiConfig::default(),
+            metrics_collector,
+            circuit_breaker,
+            service_discovery,
+            health_checker,
         })
     }
 
-    /// Tests Guardian service status endpoint with performance validation
-    async fn test_guardian_status(&self) -> Result<(), GuardianError> {
-        let start = std::time::Instant::now();
+    /// Comprehensive cleanup of test resources and metrics
+    async fn cleanup(&self) -> Result<(), GuardianError> {
+        // Stop services
+        self.guardian_service.shutdown().await?;
+        self.security_service.shutdown().await?;
 
-        // Send status request with timeout
-        let response = timeout(
-            Duration::from_millis(TEST_TIMEOUT_MS),
-            self.client.get_system_status(Request::new(Empty {}))
-        ).await.map_err(|_| GuardianError::SystemError("Request timeout".to_string()))??;
+        // Clear metrics
+        self.metrics_collector.flush().await?;
 
-        // Verify response latency
-        let duration = start.elapsed();
-        assert!(
-            duration.as_millis() < PERFORMANCE_THRESHOLD_MS as u128,
-            "Response latency {} exceeds threshold {}",
-            duration.as_millis(),
-            PERFORMANCE_THRESHOLD_MS
-        );
+        // Stop health checks
+        self.health_checker.stop().await;
 
-        // Validate metrics within thresholds
-        self.metrics.validate_metrics()?;
-
-        // Check resource usage
-        self.resource_monitor.check_usage()?;
-
-        // Verify security controls
-        self.security_validator.validate_response(&response)?;
-
-        Ok(())
-    }
-
-    /// Tests security monitoring stream with threat simulation
-    async fn test_security_monitoring(&self) -> Result<(), GuardianError> {
-        // Initialize monitoring stream with timeout
-        let mut stream = self.client.monitor_metrics(Request::new(Empty {}))
-            .await?
-            .into_inner();
-
-        // Inject test threats with varying severity
-        let test_threats = generate_test_threats();
-        for threat in test_threats {
-            self.client.simulate_threat(threat).await?;
-        }
-
-        // Verify alert generation time
-        let start = std::time::Instant::now();
-        while let Some(alert) = stream.message().await? {
-            assert!(
-                start.elapsed().as_millis() < TEST_TIMEOUT_MS as u128,
-                "Alert generation exceeded timeout"
-            );
-            
-            // Validate response actions
-            self.security_validator.validate_alert(&alert)?;
-        }
-
-        // Check security policy compliance
-        self.security_validator.verify_compliance()?;
-
-        // Verify resource usage during threat response
-        self.resource_monitor.check_usage()?;
-
-        Ok(())
-    }
-
-    /// Tests API error handling and circuit breaker functionality
-    async fn test_error_handling(&self) -> Result<(), GuardianError> {
-        // Simulate various error conditions
-        let error_cases = generate_error_cases();
-        let mut failures = 0;
-
-        for error_case in error_cases {
-            match self.client.trigger_error(error_case).await {
-                Ok(_) => continue,
-                Err(e) => {
-                    failures += 1;
-                    error!("Error case failed: {}", e);
-
-                    // Verify retry behavior
-                    if failures < ERROR_RETRY_COUNT {
-                        continue;
-                    }
-
-                    // Test circuit breaker activation
-                    if failures >= CIRCUIT_BREAKER_THRESHOLD {
-                        assert!(
-                            matches!(e, Status::Unavailable(_)),
-                            "Circuit breaker should be open"
-                        );
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Validate error responses
-        self.security_validator.verify_error_handling(failures)?;
-
-        // Check error logging
-        self.metrics.verify_error_metrics(failures)?;
-
-        // Verify system stability during errors
-        self.resource_monitor.check_usage()?;
+        // Cleanup service discovery
+        self.service_discovery.cleanup().await?;
 
         Ok(())
     }
 }
 
-#[async_trait]
-impl AsyncTestContext for ApiTestContext {
-    async fn setup() -> Self {
-        let config = TestConfig {
-            port: TEST_GRPC_PORT,
-            timeout: Duration::from_millis(TEST_TIMEOUT_MS),
-        };
-        Self::new(config).await.expect("Failed to setup test context")
-    }
-
-    async fn teardown(self) {
-        if let Err(e) = cleanup_test_resources(self.server).await {
-            error!("Failed to cleanup test resources: {}", e);
-        }
-    }
-}
-
-/// Sets up a test gRPC server instance with mock services
-async fn setup_test_server(config: TestConfig) -> Result<TestServer, GuardianError> {
-    // Initialize test configuration and metrics
-    let api_config = APIConfig {
-        grpc_port: config.port,
-        request_timeout: config.timeout,
-        ..Default::default()
+/// Sets up the test environment with mock services and monitoring
+#[tokio::test]
+async fn setup_test_environment() -> Result<TestContext, GuardianError> {
+    let config = TestConfig {
+        enable_metrics: true,
+        enable_security: true,
+        enable_service_discovery: true,
     };
 
-    // Create mock services with performance monitoring
-    let guardian_service = Arc::new(GuardianService::new(
-        Arc::new(MockGuardian::new())
-    ));
+    let context = TestContext::new(config).await?;
 
-    let security_service = Arc::new(SecurityService::new(
-        Arc::new(MockThreatDetector::new()),
-        Arc::new(MockResponseEngine::new())
-    ));
+    // Verify services are healthy
+    assert!(context.guardian_service.health_check().await.is_ok());
+    assert!(context.security_service.health_check().await.is_ok());
 
-    // Initialize server with metrics collection
-    let server = init_grpc_server(api_config).await?;
+    // Verify metrics are collecting
+    assert!(context.metrics_collector.is_healthy());
 
-    Ok(TestServer {
-        server,
-        guardian_service,
-        security_service,
-    })
+    // Verify service discovery
+    assert!(context.service_discovery.is_ready().await);
+
+    Ok(context)
 }
 
-/// Cleans up test resources and validates resource usage
-async fn cleanup_test_resources(server: TestServer) -> Result<(), GuardianError> {
-    // Stop test server
-    server.shutdown().await?;
+/// Tests the Guardian service status endpoint with performance validation
+#[tokio::test]
+async fn test_guardian_service_status() -> Result<(), GuardianError> {
+    let context = setup_test_environment().await?;
 
-    // Cleanup mock resources
-    server.guardian_service.cleanup().await?;
-    server.security_service.cleanup().await?;
+    // Create request with mTLS
+    let request = Request::new(guardian_proto::Empty {});
+    let request = request.with_tls_identity(tonic::transport::Identity::from_pem(
+        include_bytes!(TEST_CERT_PATH),
+        include_bytes!(TEST_CERT_PATH),
+    ));
 
-    // Validate resource usage metrics
-    let metrics = server.get_metrics().await?;
-    assert!(
-        metrics.resource_usage < RESOURCE_USAGE_LIMIT_PERCENT,
-        "Resource usage exceeded limit during test"
-    );
+    // Measure response time
+    let start = time::Instant::now();
+    let response = context.guardian_service.get_system_status(request).await?;
+    let duration = start.elapsed();
 
-    // Reset monitoring state
-    metrics.reset().await?;
+    // Validate response
+    let status = response.into_inner();
+    assert!(status.cpu_usage >= 0.0 && status.cpu_usage <= 100.0);
+    assert!(status.memory_usage >= 0.0 && status.memory_usage <= 100.0);
+    assert!(status.active_threats >= 0);
 
-    // Clear test data
-    server.clear_test_data().await?;
+    // Verify performance
+    assert!(duration <= PERFORMANCE_THRESHOLD);
+    histogram!("test.guardian.status.latency", duration.as_secs_f64());
 
+    // Verify resource usage
+    let metrics = context.metrics_collector.collect_metrics(None).await?;
+    assert!(metrics.iter().any(|m| m.name == "guardian.service.cpu_usage" && m.value <= RESOURCE_LIMIT));
+
+    context.cleanup().await?;
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Tests security service threat detection with circuit breaker
+#[tokio::test]
+async fn test_security_service_threat_detection() -> Result<(), GuardianError> {
+    let context = setup_test_environment().await?;
 
-    #[test_context(ApiTestContext)]
-    #[tokio::test]
-    async fn test_guardian_api_status(ctx: &mut ApiTestContext) {
-        ctx.test_guardian_status().await.expect("Status test failed");
+    // Create request
+    let request = Request::new(guardian_proto::Empty {});
+
+    // Test circuit breaker
+    for _ in 0..10 {
+        let result = context.security_service.detect_threats(request.clone()).await;
+        if context.circuit_breaker.is_open() {
+            assert!(result.is_err());
+            assert_eq!(
+                result.unwrap_err().code(),
+                tonic::Code::Unavailable
+            );
+            break;
+        }
     }
 
-    #[test_context(ApiTestContext)]
-    #[tokio::test]
-    async fn test_security_monitoring(ctx: &mut ApiTestContext) {
-        ctx.test_security_monitoring().await.expect("Security monitoring test failed");
-    }
+    // Verify metrics
+    let metrics = context.metrics_collector.collect_metrics(None).await?;
+    assert!(metrics.iter().any(|m| m.name == "guardian.security.circuit_breaker.trips"));
 
-    #[test_context(ApiTestContext)]
-    #[tokio::test]
-    async fn test_error_handling(ctx: &mut ApiTestContext) {
-        ctx.test_error_handling().await.expect("Error handling test failed");
-    }
+    context.cleanup().await?;
+    Ok(())
 }
+
+/// Tests service discovery and health checks
+#[tokio::test]
+async fn test_service_discovery() -> Result<(), GuardianError> {
+    let context = setup_test_environment().await?;
+
+    // Register services
+    context.service_discovery.register_service(
+        "guardian-test",
+        "localhost",
+        50051,
+    ).await?;
+
+    // Verify service discovery
+    let services = context.service_discovery.list_services().await?;
+    assert!(services.contains(&"guardian-test".to_string()));
+
+    // Test health checks
+    let health_status = context.health_checker.check_service("guardian-test").await?;
+    assert!(health_status.is_healthy);
+
+    context.cleanup().await?;
+    Ok(())
+}
+
+/// Performance benchmarks for API endpoints
+fn criterion_benchmark(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let context = rt.block_on(setup_test_environment()).unwrap();
+
+    c.bench_function("guardian_status", |b| {
+        b.iter(|| {
+            rt.block_on(async {
+                let request = Request::new(guardian_proto::Empty {});
+                black_box(context.guardian_service.get_system_status(request).await.unwrap());
+            })
+        })
+    });
+
+    rt.block_on(context.cleanup()).unwrap();
+}
+
+criterion_group!(benches, criterion_benchmark);
+criterion_main!(benches);

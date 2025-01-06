@@ -1,111 +1,97 @@
-target/**/*
-coverage/
+target/
+Cargo.lock
 .cargo/
-node_modules/
-**/__pycache__/
-**/*.pyc
-.pytest_cache/
-.hypothesis/
-debug/
 
-# Development Files
-.rustfmt.toml
-rustfmt.toml
-clippy.toml
-*.rs.bk
+# Development and test files
+tests/
+benches/
+docs/
+scripts/
+
+# Version control
+.git/
+.gitignore
+
+# Environment and configuration
+.env*
+docker-compose*.yml
+temporal*.yaml
+
+# Documentation
+*.md
+*.txt
+*.pdf
+
+# Temporary and backup files
 *.log
-*.sh
-*.example
-*.test
 *.bak
 *.swp
-*.swo
+*.tmp
+*~
 
-# Security Sensitive Files
+# Security-sensitive files
 **/*.key
 **/*.pem
 **/*.crt
 **/*.p12
-**/*_rsa
-**/*.password
-**/*.secret
-.env
-.env.*
+**/*.jks
+**/*.keystore
 
-# Version Control
-.git/
-.github/
-.gitignore
+# ML artifacts
+ml/models/*.onnx
+ml/training/
+ml/datasets/
+ml/checkpoints/
 
-# Docker Files
-Dockerfile
-docker-compose*.yml
-.dockerignore
-
-# IDE and Editor
+# IDE and editor files
 .vscode/
 .idea/
-*.sublime-*
+*.iml
 .project
-.settings/
+.classpath
 
-# Documentation and Assets
-docs/
-assets/
-documentation/
-examples/
-samples/
-*.md
-
-# Test Directories
-tests/
-benches/
-scripts/
-
-# Temporary and Cache Files
-*.tmp
-*.temp
-.cache/
-tmp/
-
-# OS Generated Files
+# System files
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
 
-# Dependency Lock Files
-Cargo.lock
-package-lock.json
-yarn.lock
-poetry.lock
+# Docker files
+.dockerignore
+Dockerfile*
 
-# Profiling and Debug Data
+# Debug files
+*.debug
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# FreeBSD specific
+*.core
+*.symbols
+
+# Rust specific
+**/*.rs.bk
+**/*.rlib
+**/*.rmeta
+
+# Generated files
+*.generated.*
+*.gen.*
+
+# Cache directories
+.cache/
+.npm/
+.yarn/
+
+# Profiling data
 *.prof
 *.heap
 *.cpu
-core.*
 
-# Database Files
-*.db
-*.sqlite
-*.sqlite3
-
-# Backup Files
-**/*~
-**/*.orig
-**/*.old
-
-# Generated Files
-dist/
-build/
-generated/
-*.generated.*
-
-# Local Development Configs
-config.local.*
-*.local.*
-local.*
+# Temporary build files
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe

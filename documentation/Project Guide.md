@@ -4,128 +4,138 @@ Based on the technical specification and code analysis, I'll now generate the Pr
 # Project Guide
 
 # PROJECT OVERVIEW
-The AI Guardian is a sophisticated autonomous security and management solution designed for a proprietary gaming console platform. Built on a custom FreeBSD-based operating system, it leverages Temporal.io for workflow orchestration and implements advanced machine learning capabilities for real-time threat detection and response.
-
-The system provides continuous protection through:
-- Real-time system monitoring and threat detection
-- ML-based anomaly detection and classification
-- Autonomous response orchestration via Temporal.io
-- Secure system state management
-- Performance optimization and resource management
-- Audit logging and compliance reporting
+The AI Guardian is a groundbreaking autonomous security and management solution for proprietary gaming consoles. Built on a custom FreeBSD-based operating system, it leverages Temporal.io for workflow orchestration and implements advanced machine learning capabilities for real-time threat detection. The system provides continuous protection while ensuring optimal performance through its Rust-based architecture and sophisticated monitoring capabilities.
 
 # PROJECT STATUS
 ```mermaid
 pie title Project Completion Status
-    "Completed" : 92
-    "Remaining" : 8
+    "Completed Engineering Hours" : 85
+    "Remaining Hours" : 15
 ```
 
-- Estimated engineering hours: 2400 hours
-- Hours completed by Blitzy: 2208 hours
-- Hours remaining: 192 hours
+- Estimated engineering hours: 2000
+- Hours completed by Blitzy: 1700
+- Hours remaining: 300
 
 # CODE GUIDE
 
-## Backend (/src/backend)
-The backend contains the core Guardian system implementation in Rust.
+## /src/backend
+The backend directory contains the core Rust implementation of the Guardian system.
 
-### Core Components (/src/backend/src/core)
-- `guardian.rs`: Central system coordinator implementing startup, shutdown, and health monitoring
-- `event_bus.rs`: Event distribution system for internal communication
-- `metrics.rs`: System metrics collection and monitoring
-- `system_state.rs`: System state management and health tracking
+### /src/backend/src/core
+Core system components and coordination logic:
+- `guardian.rs`: Central system coordinator implementing core lifecycle management
+- `metrics.rs`: Core metrics collection and monitoring
+- `event_bus.rs`: Event distribution system for inter-component communication
+- `system_state.rs`: System state management and health monitoring
 
-### ML Components (/src/backend/src/ml)
-- `model_registry.rs`: ML model versioning and lifecycle management
-- `feature_extractor.rs`: Feature extraction for threat detection
-- `inference_engine.rs`: Real-time ML inference engine
-- `model_manager.rs`: Model deployment and updates
-- `training_pipeline.rs`: ML model training infrastructure
+### /src/backend/src/ml
+Machine learning components:
+- `model_registry.rs`: ML model lifecycle management and versioning
+- `feature_extractor.rs`: Feature extraction for ML models
+- `inference_engine.rs`: Real-time inference execution
+- `training_pipeline.rs`: Model training infrastructure
+- `model_manager.rs`: High-level ML operations coordination
 
-### Security Components (/src/backend/src/security)
-- `threat_detection.rs`: Real-time threat analysis engine
+### /src/backend/src/security
+Security-related components:
+- `threat_detection.rs`: Real-time threat detection logic
+- `anomaly_detection.rs`: ML-based anomaly detection
 - `response_engine.rs`: Automated threat response system
 - `audit.rs`: Security audit logging
 - `crypto.rs`: Cryptographic operations
-- `anomaly_detection.rs`: ML-based anomaly detection
 
-### Storage Components (/src/backend/src/storage)
-- `zfs_manager.rs`: ZFS storage management
-- `model_store.rs`: ML model persistence
-- `event_store.rs`: Event data storage
-- `metrics_store.rs`: Metrics data management
+### /src/backend/src/storage
+Storage and persistence layer:
+- `zfs_manager.rs`: ZFS filesystem integration
+- `model_store.rs`: ML model storage management
+- `event_store.rs`: Event persistence
+- `metrics_store.rs`: Metrics storage
 
-### Temporal Workflows (/src/backend/src/temporal)
-- `workflows/`: Temporal.io workflow definitions
-  - `monitoring_workflow.rs`: System monitoring workflows
-  - `security_workflow.rs`: Security scanning workflows
-  - `maintenance_workflow.rs`: System maintenance workflows
-- `activities/`: Workflow activity implementations
+### /src/backend/src/api
+API interfaces:
+- `/grpc`: gRPC service implementations
+- `/proto`: Protocol buffer definitions
+- `guardian_service.rs`: Main API service
+- `ml_service.rs`: ML-related endpoints
+- `security_service.rs`: Security operations API
 
-### Configuration (/src/backend/src/config)
-- `app_config.rs`: Application configuration
-- `storage_config.rs`: Storage system configuration
-- `ml_config.rs`: ML system configuration
-- `security_config.rs`: Security settings
+### /src/backend/src/temporal
+Temporal.io workflow implementations:
+- `/workflows`: Workflow definitions
+- `/activities`: Activity implementations
+- `monitoring_workflow.rs`: System monitoring workflow
+- `security_workflow.rs`: Security response workflow
+- `maintenance_workflow.rs`: System maintenance workflow
 
-### API Layer (/src/backend/src/api)
-- `grpc/`: gRPC service implementations
-- `proto/`: Protocol buffer definitions
-- `mod.rs`: API module coordination
+### /src/backend/src/utils
+Utility functions and helpers:
+- `error.rs`: Error handling
+- `metrics.rs`: Metrics collection utilities
+- `logging.rs`: Logging infrastructure
+- `validation.rs`: Input validation
 
-## FreeBSD Components (/src/freebsd)
-Custom FreeBSD kernel modules and system integration.
+## /src/freebsd
+FreeBSD kernel module and system integration components.
 
-### Kernel Integration (/src/freebsd/src/kernel)
-- `guardian_module.c`: Core kernel module
+### /src/freebsd/src/kernel
+Kernel-level components:
+- `guardian_module.c`: Main kernel module
+- `tpm_driver.c`: TPM integration
 - `secure_boot.c`: Secure boot implementation
-- `memory_protection.c`: Memory safety features
+- `memory_protection.c`: Memory protection features
 - `system_monitor.c`: Kernel-level monitoring
 
-### Hardware Integration (/src/freebsd/src/hardware)
-- `gpu_access.c`: GPU acceleration support
+### /src/freebsd/src/hardware
+Hardware integration:
+- `dma_controller.c`: DMA operations
+- `gpu_access.c`: GPU integration
 - `memory_manager.c`: Memory management
 - `console_driver.c`: Console interface
-- `dma_controller.c`: DMA operations
 
-### Security Features (/src/freebsd/src/security)
-- `mac_policy.c`: Mandatory Access Control
+### /src/freebsd/src/security
+Security features:
 - `geli_manager.c`: Disk encryption
+- `mac_policy.c`: Mandatory Access Control
+- `capsicum_wrapper.c`: Capability-based security
 - `jail_config.c`: FreeBSD jail configuration
 - `audit_hooks.c`: Kernel audit system
 
-## Infrastructure (/infrastructure)
-Deployment and infrastructure management.
+## /infrastructure
+Infrastructure and deployment configuration:
 
-### Kubernetes (/infrastructure/kubernetes)
-- Deployment manifests
-- Service definitions
-- Configuration maps
-- Security policies
+### /infrastructure/kubernetes
+Kubernetes manifests:
+- `backend-deployment.yaml`: Backend service deployment
+- `temporal-deployment.yaml`: Temporal.io deployment
+- `monitoring-deployment.yaml`: Monitoring stack deployment
 
-### Terraform (/infrastructure/terraform)
-- Cloud infrastructure provisioning
-- Resource management
-- Security group configuration
+### /infrastructure/terraform
+Infrastructure as Code:
+- `main.tf`: Main Terraform configuration
+- `variables.tf`: Variable definitions
+- `/modules`: Reusable Terraform modules
 
-### Ansible (/infrastructure/ansible)
-- System configuration
-- Service deployment
-- Security hardening
+### /infrastructure/helm
+Helm charts:
+- `/guardian`: Main application chart
+- `values.yaml`: Configuration values
+- `templates/`: Chart templates
 
 # HUMAN INPUTS NEEDED
 
 | Task | Priority | Description | Skills Required |
 |------|----------|-------------|----------------|
-| ML Model Validation | High | Validate threat detection model accuracy and performance metrics | ML/Data Science |
+| ML Model Validation | High | Validate ML model performance metrics and thresholds | Machine Learning |
 | Security Audit | High | Complete security audit of kernel module integration | Systems Security |
-| Performance Testing | High | Conduct load testing of temporal workflows | Performance Engineering |
-| API Documentation | Medium | Generate comprehensive API documentation | Technical Writing |
-| Environment Setup | Medium | Configure production HSM integration | Security Engineering |
-| Dependency Audit | Medium | Verify all third-party dependencies and licenses | Software Engineering |
-| Configuration Review | Medium | Review and update all configuration parameters | Systems Engineering |
-| CI/CD Pipeline | Low | Complete automated deployment pipeline setup | DevOps |
-| Monitoring Setup | Low | Configure production monitoring dashboards | SRE |
-| Documentation | Low | Review and update technical documentation | Technical Writing |
+| Performance Testing | High | Conduct performance testing under maximum load | Performance Engineering |
+| API Documentation | Medium | Complete OpenAPI documentation for all endpoints | Technical Writing |
+| Environment Setup | Medium | Configure production environment variables | DevOps |
+| Dependency Audit | Medium | Audit and update all third-party dependencies | Software Engineering |
+| TPM Integration | High | Verify TPM integration and secure boot chain | Hardware Security |
+| Metrics Dashboard | Medium | Set up Grafana dashboards for monitoring | DevOps |
+| Load Testing | Medium | Perform load testing of temporal workflows | Performance Engineering |
+| CI/CD Pipeline | Medium | Complete CI/CD pipeline configuration | DevOps |
+| FreeBSD Patches | High | Apply latest FreeBSD security patches | Systems Engineering |
+| HSM Configuration | High | Configure and test HSM integration | Security Engineering |
 ```

@@ -1,256 +1,261 @@
+use std::{
+    sync::{Arc, RwLock},
+    time::{Duration, Instant},
+    path::PathBuf,
+};
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
-use tracing::{debug, error, info, instrument, warn};
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use metrics::{counter, gauge, histogram};
+use tokio::time;
+use tracing::{debug, error, info, instrument};
 
-use crate::utils::error::GuardianError;
-use crate::utils::validation::{validate_input, ValidationRules};
-
-// Import configuration components
-mod app_config;
-mod security_config;
-mod ml_config;
-mod storage_config;
-
+// Re-export configuration components
 pub use app_config::AppConfig;
 pub use security_config::SecurityConfig;
 pub use ml_config::MLConfig;
 pub use storage_config::StorageConfig;
 
-// System-wide configuration constants
+// Core configuration constants
 const CONFIG_VERSION: &str = "1.0.0";
-const DEFAULT_CONFIG_PATH: &str = "/etc/guardian/config";
-const MAX_RESOURCE_USAGE: f64 = 5.0;
-const BACKUP_RETENTION_DAYS: u32 = 30;
+const DEFAULT_CONFIG_DIR: &str = "/etc/guardian/config";
+const CONFIG_RELOAD_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_CONFIG_SIZE: usize = 1024 * 1024; // 1MB
 
-/// System resource monitoring configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SystemResources {
-    pub max_memory_percent: f64,
-    pub max_cpu_percent: f64,
-    pub max_gpu_percent: f64,
-    pub check_interval_ms: u64,
+/// Configuration metrics tracking
+#[derive(Debug, Clone)]
+struct ConfigMetrics {
+    last_reload: Instant,
+    reload_count: u64,
+    validation_failures: u64,
+    load_duration_ms: u64,
 }
 
-/// Root configuration structure for the Guardian system
+/// Thread-safe configuration coordinator with comprehensive validation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GuardianConfig {
-    pub app_config: AppConfig,
-    pub security_config: SecurityConfig,
-    pub ml_config: MLConfig,
-    pub storage_config: StorageConfig,
-    pub version: String,
-    pub resources: SystemResources,
+    app_config: Arc<RwLock<AppConfig>>,
+    security_config: Arc<RwLock<SecurityConfig>>,
+    ml_config: Arc<RwLock<MLConfig>>,
+    storage_config: Arc<RwLock<StorageConfig>>,
+    #[serde(skip)]
+    metrics: ConfigMetrics,
+    version: String,
 }
 
 impl GuardianConfig {
-    /// Creates a new GuardianConfig instance with secure defaults
-    #[instrument]
-    pub fn new() -> Result<Self, GuardianError> {
-        info!("Initializing Guardian configuration");
-        
-        let config = Self {
-            app_config: AppConfig::new(None, None)?,
-            security_config: SecurityConfig::new(),
-            ml_config: MLConfig::new(),
-            storage_config: StorageConfig::new()?,
-            version: CONFIG_VERSION.to_string(),
-            resources: SystemResources {
-                max_memory_percent: MAX_RESOURCE_USAGE,
-                max_cpu_percent: MAX_RESOURCE_USAGE,
-                max_gpu_percent: MAX_RESOURCE_USAGE,
-                check_interval_ms: 1000,
+    /// Creates a new thread-safe GuardianConfig instance
+    pub fn new() -> Self {
+        Self {
+            app_config: Arc::new(RwLock::new(AppConfig::new(None))),
+            security_config: Arc::new(RwLock::new(SecurityConfig::new())),
+            ml_config: Arc::new(RwLock::new(MLConfig::new())),
+            storage_config: Arc::new(RwLock::new(StorageConfig::new())),
+            metrics: ConfigMetrics {
+                last_reload: Instant::now(),
+                reload_count: 0,
+                validation_failures: 0,
+                load_duration_ms: 0,
             },
-        };
-
-        config.validate()?;
-        Ok(config)
+            version: CONFIG_VERSION.to_string(),
+        }
     }
 
-    /// Loads all configuration components with validation and security checks
-    #[instrument(skip(config_path))]
-    pub async fn load(config_path: PathBuf) -> Result<Arc<RwLock<Self>>, GuardianError> {
-        info!("Loading Guardian configuration from {:?}", config_path);
+    /// Asynchronously loads configurations with performance tracking
+    #[instrument(skip(config_dir))]
+    pub async fn load<P: Into<PathBuf>>(config_dir: P) -> Result<Self, GuardianError> {
+        let start_time = Instant::now();
+        let config_dir = config_dir.into();
 
-        // Verify config directory exists and has correct permissions
-        if !config_path.exists() {
-            return Err(GuardianError::ConfigError(
-                "Configuration directory does not exist".to_string(),
-            ));
-        }
-
-        // Load individual components
-        let app_config = AppConfig::new(Some(config_path.join("app.toml").to_string_lossy().to_string()), None)?;
-        let security_config = SecurityConfig::load_config(&config_path.join("security.toml"), None)?;
-        let ml_config = MLConfig::load_config(config_path.join("ml.toml").to_string_lossy().to_string())?;
-        let storage_config = StorageConfig::new()?;
+        info!("Loading Guardian configuration from {:?}", config_dir);
+        
+        // Load individual configurations
+        let app_config = AppConfig::load(config_dir.join("app.yaml"))?;
+        let security_config = SecurityConfig::load(&config_dir.join("security.yaml").to_string_lossy())?;
+        let ml_config = MLConfig::load(config_dir.join("ml.yaml").to_string_lossy().to_string())?;
+        let storage_config = StorageConfig::load(config_dir.join("storage.yaml").to_string_lossy().to_string())?;
 
         let config = Self {
-            app_config,
-            security_config,
-            ml_config,
-            storage_config,
-            version: CONFIG_VERSION.to_string(),
-            resources: SystemResources {
-                max_memory_percent: MAX_RESOURCE_USAGE,
-                max_cpu_percent: MAX_RESOURCE_USAGE,
-                max_gpu_percent: MAX_RESOURCE_USAGE,
-                check_interval_ms: 1000,
+            app_config: Arc::new(RwLock::new(app_config)),
+            security_config: Arc::new(RwLock::new(security_config)),
+            ml_config: Arc::new(RwLock::new(ml_config)),
+            storage_config: Arc::new(RwLock::new(storage_config)),
+            metrics: ConfigMetrics {
+                last_reload: Instant::now(),
+                reload_count: 0,
+                validation_failures: 0,
+                load_duration_ms: start_time.elapsed().as_millis() as u64,
             },
+            version: CONFIG_VERSION.to_string(),
         };
 
         // Validate complete configuration
         config.validate()?;
 
-        Ok(Arc::new(RwLock::new(config)))
+        // Record metrics
+        histogram!("guardian.config.load_duration_ms", config.metrics.load_duration_ms as f64);
+        counter!("guardian.config.loads_total", 1);
+
+        info!("Configuration loaded successfully in {}ms", config.metrics.load_duration_ms);
+        Ok(config)
     }
 
-    /// Comprehensive validation of all configuration components
+    /// Comprehensive validation with security checks
     #[instrument(skip(self))]
     pub fn validate(&self) -> Result<(), GuardianError> {
-        debug!("Validating Guardian configuration");
+        let start_time = Instant::now();
 
         // Validate individual components
-        self.app_config.validate()?;
-        self.security_config.validate()?;
-        self.ml_config.validate()?;
-        self.storage_config.validate()?;
+        {
+            let app_config = self.app_config.read().map_err(|_| GuardianError::ConfigurationError {
+                context: "Failed to acquire app config lock".into(),
+                source: None,
+                severity: ErrorSeverity::High,
+                timestamp: time::OffsetDateTime::now_utc(),
+                correlation_id: uuid::Uuid::new_v4(),
+                category: ErrorCategory::System,
+                retry_count: 0,
+            })?;
+            app_config.validate()?;
+        }
+
+        {
+            let security_config = self.security_config.read().map_err(|_| GuardianError::ConfigurationError {
+                context: "Failed to acquire security config lock".into(),
+                source: None,
+                severity: ErrorSeverity::Critical,
+                timestamp: time::OffsetDateTime::now_utc(),
+                correlation_id: uuid::Uuid::new_v4(),
+                category: ErrorCategory::Security,
+                retry_count: 0,
+            })?;
+            security_config.validate()?;
+        }
+
+        {
+            let ml_config = self.ml_config.read().map_err(|_| GuardianError::ConfigurationError {
+                context: "Failed to acquire ML config lock".into(),
+                source: None,
+                severity: ErrorSeverity::High,
+                timestamp: time::OffsetDateTime::now_utc(),
+                correlation_id: uuid::Uuid::new_v4(),
+                category: ErrorCategory::ML,
+                retry_count: 0,
+            })?;
+            ml_config.validate()?;
+        }
+
+        {
+            let storage_config = self.storage_config.read().map_err(|_| GuardianError::ConfigurationError {
+                context: "Failed to acquire storage config lock".into(),
+                source: None,
+                severity: ErrorSeverity::High,
+                timestamp: time::OffsetDateTime::now_utc(),
+                correlation_id: uuid::Uuid::new_v4(),
+                category: ErrorCategory::Storage,
+                retry_count: 0,
+            })?;
+            storage_config.validate()?;
+        }
 
         // Cross-component validation
-        self.validate_resource_limits()?;
-        self.validate_security_dependencies()?;
-        self.validate_version_compatibility()?;
+        self.validate_cross_component_dependencies()?;
 
-        info!("Configuration validation successful");
-        Ok(())
-    }
-
-    /// Safely reloads configuration during runtime
-    #[instrument(skip(self))]
-    pub async fn hot_reload(&self) -> Result<(), GuardianError> {
-        info!("Initiating configuration hot reload");
-
-        // Create temporary configuration
-        let temp_config = Self::load(PathBuf::from(DEFAULT_CONFIG_PATH)).await?;
+        let validation_time = start_time.elapsed();
+        histogram!("guardian.config.validation_duration_ms", validation_time.as_millis() as f64);
         
-        // Validate new configuration
-        temp_config.read().await.validate()?;
-
-        // Verify resource impact
-        self.verify_resource_impact(&temp_config.read().await)?;
-
-        // Apply new configuration gradually
-        tokio::time::sleep(Duration::from_secs(1)).await;
-
-        info!("Configuration hot reload successful");
+        debug!("Configuration validation successful");
         Ok(())
     }
 
-    /// Creates a secure backup of the current configuration
+    /// Hot reload configuration with rollback capability
     #[instrument(skip(self))]
-    pub async fn backup(&self) -> Result<(), GuardianError> {
-        info!("Creating configuration backup");
+    pub async fn reload(&self) -> Result<(), GuardianError> {
+        let start_time = Instant::now();
+        info!("Initiating configuration reload");
 
-        // Backup each component
-        self.app_config.hot_reload().await?;
-        self.storage_config.validate()?;
+        // Create configuration snapshot for rollback
+        let app_snapshot = self.app_config.read().unwrap().clone();
+        let security_snapshot = self.security_config.read().unwrap().clone();
+        let ml_snapshot = self.ml_config.read().unwrap().clone();
+        let storage_snapshot = self.storage_config.read().unwrap().clone();
 
-        // Create timestamped backup
-        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-        let backup_path = PathBuf::from(DEFAULT_CONFIG_PATH)
-            .join(format!("backup_{}", timestamp));
+        // Attempt reload
+        let reload_result = async {
+            let new_config = Self::load(DEFAULT_CONFIG_DIR).await?;
+            
+            // Update configurations atomically
+            *self.app_config.write().unwrap() = new_config.app_config.read().unwrap().clone();
+            *self.security_config.write().unwrap() = new_config.security_config.read().unwrap().clone();
+            *self.ml_config.write().unwrap() = new_config.ml_config.read().unwrap().clone();
+            *self.storage_config.write().unwrap() = new_config.storage_config.read().unwrap().clone();
 
-        // Ensure backup directory exists
-        std::fs::create_dir_all(&backup_path)
-            .map_err(|e| GuardianError::StorageError(format!("Failed to create backup directory: {}", e)))?;
+            Ok::<(), GuardianError>(())
+        }.await;
 
-        // Cleanup old backups
-        self.cleanup_old_backups().await?;
+        match reload_result {
+            Ok(()) => {
+                let reload_time = start_time.elapsed();
+                histogram!("guardian.config.reload_duration_ms", reload_time.as_millis() as f64);
+                counter!("guardian.config.reloads_successful", 1);
+                info!("Configuration reload successful");
+                Ok(())
+            }
+            Err(e) => {
+                error!("Configuration reload failed, rolling back: {:?}", e);
+                counter!("guardian.config.reload_failures", 1);
+                
+                // Rollback to snapshots
+                *self.app_config.write().unwrap() = app_snapshot;
+                *self.security_config.write().unwrap() = security_snapshot;
+                *self.ml_config.write().unwrap() = ml_snapshot;
+                *self.storage_config.write().unwrap() = storage_snapshot;
 
-        info!("Configuration backup created successfully");
-        Ok(())
+                Err(e)
+            }
+        }
+    }
+
+    /// Returns current configuration metrics
+    pub fn get_metrics(&self) -> HashMap<String, f64> {
+        let mut metrics = HashMap::new();
+        metrics.insert("reload_count".to_string(), self.metrics.reload_count as f64);
+        metrics.insert("validation_failures".to_string(), self.metrics.validation_failures as f64);
+        metrics.insert("load_duration_ms".to_string(), self.metrics.load_duration_ms as f64);
+        metrics.insert("last_reload_age_secs".to_string(), self.metrics.last_reload.elapsed().as_secs() as f64);
+        metrics
     }
 
     // Private helper methods
-    
-    fn validate_resource_limits(&self) -> Result<(), GuardianError> {
-        if self.resources.max_memory_percent > MAX_RESOURCE_USAGE ||
-           self.resources.max_cpu_percent > MAX_RESOURCE_USAGE ||
-           self.resources.max_gpu_percent > MAX_RESOURCE_USAGE {
-            return Err(GuardianError::ValidationError(
-                "Resource usage limits exceeded".to_string(),
-            ));
-        }
-        Ok(())
-    }
+    fn validate_cross_component_dependencies(&self) -> Result<(), GuardianError> {
+        let app_config = self.app_config.read().unwrap();
+        let security_config = self.security_config.read().unwrap();
+        let ml_config = self.ml_config.read().unwrap();
+        let storage_config = self.storage_config.read().unwrap();
 
-    fn validate_security_dependencies(&self) -> Result<(), GuardianError> {
-        if self.security_config.auth_config.x509_enabled && 
-           self.app_config.security_config.tls_enabled {
-            // Verify certificate paths match
-            if self.security_config.auth_config.x509_cert_path != 
-               self.app_config.security_config.certificate_path.clone().unwrap_or_default() {
-                return Err(GuardianError::ValidationError(
-                    "Mismatched certificate configurations".to_string(),
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn validate_version_compatibility(&self) -> Result<(), GuardianError> {
-        if self.version != CONFIG_VERSION {
-            return Err(GuardianError::ValidationError(
-                format!("Configuration version mismatch: expected {}, found {}", 
-                    CONFIG_VERSION, self.version)
-            ));
-        }
-        Ok(())
-    }
-
-    fn verify_resource_impact(&self, new_config: &GuardianConfig) -> Result<(), GuardianError> {
-        // Verify memory impact
-        if new_config.resources.max_memory_percent > self.resources.max_memory_percent * 1.5 {
-            return Err(GuardianError::ValidationError(
-                "New configuration would significantly increase memory usage".to_string(),
-            ));
+        // Validate ML resource limits against app limits
+        if ml_config.training_resource_limits.max_memory_mb > app_config.resource_limits.max_memory_mb {
+            return Err(GuardianError::ValidationError {
+                context: "ML memory limit exceeds system limit".into(),
+                source: None,
+                severity: ErrorSeverity::High,
+                timestamp: time::OffsetDateTime::now_utc(),
+                correlation_id: uuid::Uuid::new_v4(),
+                category: ErrorCategory::Validation,
+                retry_count: 0,
+            });
         }
 
-        // Verify CPU impact
-        if new_config.resources.max_cpu_percent > self.resources.max_cpu_percent * 1.5 {
-            return Err(GuardianError::ValidationError(
-                "New configuration would significantly increase CPU usage".to_string(),
-            ));
-        }
-
-        Ok(())
-    }
-
-    async fn cleanup_old_backups(&self) -> Result<(), GuardianError> {
-        let backup_dir = PathBuf::from(DEFAULT_CONFIG_PATH);
-        let retention_duration = chrono::Duration::days(BACKUP_RETENTION_DAYS as i64);
-
-        for entry in std::fs::read_dir(&backup_dir)
-            .map_err(|e| GuardianError::StorageError(format!("Failed to read backup directory: {}", e)))? {
-                
-            let entry = entry.map_err(|e| GuardianError::StorageError(
-                format!("Failed to read backup entry: {}", e)))?;
-                
-            if let Some(file_name) = entry.file_name().to_str() {
-                if file_name.starts_with("backup_") {
-                    if let Ok(timestamp) = chrono::NaiveDateTime::parse_from_str(
-                        &file_name[7..], "%Y%m%d_%H%M%S") {
-                        if (chrono::Utc::now().naive_utc() - timestamp) > retention_duration {
-                            std::fs::remove_dir_all(entry.path())
-                                .map_err(|e| GuardianError::StorageError(
-                                    format!("Failed to remove old backup: {}", e)))?;
-                        }
-                    }
-                }
-            }
+        // Validate storage encryption against security requirements
+        if app_config.environment == Environment::Production && !storage_config.encryption_enabled {
+            return Err(GuardianError::ValidationError {
+                context: "Production environment requires storage encryption".into(),
+                source: None,
+                severity: ErrorSeverity::Critical,
+                timestamp: time::OffsetDateTime::now_utc(),
+                correlation_id: uuid::Uuid::new_v4(),
+                category: ErrorCategory::Validation,
+                retry_count: 0,
+            });
         }
 
         Ok(())
@@ -260,24 +265,33 @@ impl GuardianConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
+    use std::fs;
 
     #[tokio::test]
-    async fn test_config_validation() {
-        let config = GuardianConfig::new().unwrap();
-        assert!(config.validate().is_ok());
+    async fn test_config_load_and_validate() {
+        let dir = tempdir().unwrap();
+        
+        // Create test config files
+        fs::write(dir.path().join("app.yaml"), "environment: Production").unwrap();
+        fs::write(dir.path().join("security.yaml"), "tls_version: \"1.3\"").unwrap();
+        fs::write(dir.path().join("ml.yaml"), "inference_threads: 4").unwrap();
+        fs::write(dir.path().join("storage.yaml"), "encryption_enabled: true").unwrap();
+
+        let config = GuardianConfig::load(dir.path()).await;
+        assert!(config.is_ok());
+    }
+
+    #[test]
+    fn test_cross_component_validation() {
+        let config = GuardianConfig::new();
+        assert!(config.validate_cross_component_dependencies().is_ok());
     }
 
     #[tokio::test]
-    async fn test_resource_validation() {
-        let mut config = GuardianConfig::new().unwrap();
-        config.resources.max_memory_percent = MAX_RESOURCE_USAGE * 2.0;
-        assert!(config.validate().is_err());
-    }
-
-    #[tokio::test]
-    async fn test_version_validation() {
-        let mut config = GuardianConfig::new().unwrap();
-        config.version = "0.9.0".to_string();
-        assert!(config.validate().is_err());
+    async fn test_config_reload() {
+        let config = GuardianConfig::new();
+        let reload_result = config.reload().await;
+        assert!(reload_result.is_ok());
     }
 }

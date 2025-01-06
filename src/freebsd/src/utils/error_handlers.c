@@ -1,173 +1,205 @@
 /*
- * Guardian System - Error Handling Utilities Implementation
- * FreeBSD Kernel Module
- *
- * Implements robust error handling, logging, and management functionality
- * for kernel-level operations with support for error chaining, per-CPU buffers,
- * rate limiting, and detailed context information.
+ * Guardian System - Error Handler Implementation
+ * 
+ * Implementation of error handling utilities for the Guardian system's FreeBSD
+ * kernel module with comprehensive security features and audit trail support.
  *
  * Version: 1.0.0
- * FreeBSD 13.0+ Kernel Module
+ * FreeBSD Version: 13.0
  */
 
-#include <sys/types.h>
-#include <sys/param.h>
-#include <sys/kernel.h>
-#include <sys/systm.h>
-#include <sys/malloc.h>
-#include <sys/pcpu.h>
+#include <sys/types.h>    /* FreeBSD 13.0 */
+#include <sys/param.h>    /* FreeBSD 13.0 */
+#include <sys/kernel.h>   /* FreeBSD 13.0 */
+#include <sys/systm.h>    /* FreeBSD 13.0 */
+#include <sys/malloc.h>   /* FreeBSD 13.0 */
+#include <sys/mutex.h>    /* FreeBSD 13.0 */
+
 #include "../include/guardian_errors.h"
 #include "error_handlers.h"
+#include "debug_helpers.h"
 
-/* Per-CPU error chain buffer aligned to cache line */
-static __thread guardian_error_t g_error_chain_pcpu[GUARDIAN_MAX_ERROR_CHAIN] 
-    __aligned(CACHE_LINE_SIZE);
-
-/* Per-CPU error count */
-static __thread atomic_t g_error_count_pcpu __aligned(CACHE_LINE_SIZE);
-
-/* Per-CPU error log buffer */
-static __thread char g_error_log_buffer_pcpu[GUARDIAN_ERROR_LOG_BUFFER_SIZE] 
-    __aligned(CACHE_LINE_SIZE);
-
-/* Global error mutex for synchronization */
+/* Global error handling state */
+static guardian_error_handler_t g_error_handlers[GUARDIAN_MAX_ERROR_HANDLERS];
+static size_t g_handler_count = 0;
+static guardian_error_chain_t g_error_chain;
 static struct mtx g_error_mutex;
+static guardian_security_context_t g_security_context;
 
-/* Global rate limiting counter */
-static atomic_t g_error_rate_limit;
-
-/* Error statistics structure */
-struct guardian_error_stats {
-    atomic_t total_errors;
-    atomic_t errors_by_severity[5]; /* Indexed by GUARDIAN_ERROR_SEVERITY_LEVELS */
-    atomic_t rate_limited_count;
-} __aligned(CACHE_LINE_SIZE);
-
-static struct guardian_error_stats g_error_stats;
+/* Memory allocation tag */
+MALLOC_DECLARE(M_GUARDIAN_ERROR);
+MALLOC_DEFINE(M_GUARDIAN_ERROR, "guardian_error", "Guardian Error Handling");
 
 /* Initialize error handling subsystem */
-guardian_error_t guardian_error_init(void) {
-    /* Initialize global mutex */
+guardian_status_t
+guardian_error_init(void)
+{
+    /* Initialize error mutex */
     mtx_init(&g_error_mutex, "guardian_error_mutex", NULL, MTX_DEF);
-
-    /* Initialize per-CPU error chains */
-    CPU_FOREACH(cpu) {
-        memset(DPCPU_ID_PTR(cpu, g_error_chain_pcpu), 0, 
-               sizeof(guardian_error_t) * GUARDIAN_MAX_ERROR_CHAIN);
-        atomic_store_rel_int(DPCPU_ID_PTR(cpu, g_error_count_pcpu), 0);
-        memset(DPCPU_ID_PTR(cpu, g_error_log_buffer_pcpu), 0, 
-               GUARDIAN_ERROR_LOG_BUFFER_SIZE);
-    }
-
-    /* Initialize rate limiting */
-    atomic_store_rel_int(&g_error_rate_limit, 0);
-
-    /* Initialize error statistics */
-    memset(&g_error_stats, 0, sizeof(struct guardian_error_stats));
-
+    
+    /* Initialize error chain */
+    bzero(&g_error_chain, sizeof(guardian_error_chain_t));
+    mtx_init(&g_error_chain.chain_lock, "guardian_error_chain_lock", NULL, MTX_DEF);
+    
+    /* Initialize handler registry */
+    bzero(g_error_handlers, sizeof(g_error_handlers));
+    g_handler_count = 0;
+    
+    /* Initialize security context */
+    bzero(&g_security_context, sizeof(guardian_security_context_t));
+    g_security_context.security_flags = GUARDIAN_SECURITY_ENABLED;
+    
     return GUARDIAN_SUCCESS;
 }
 
-/* Log an error with context information */
-void guardian_error_log(
-    guardian_error_t error_code,
-    uint8_t severity,
-    const char *file,
-    int line,
-    const char *func,
-    const char *fmt,
-    ...) {
+/* Log error with security context validation */
+void
+guardian_error_log(const guardian_error_info_t *error_info,
+                  const guardian_security_context_t *sec_context)
+{
+    guardian_status_t status;
+    char audit_buffer[GUARDIAN_ERROR_AUDIT_BUFFER];
     
-    va_list args;
-    char *log_buffer;
-    size_t remaining;
-    int current_count;
-
-    /* Rate limiting check */
-    if (atomic_load_acq_int(&g_error_rate_limit) >= GUARDIAN_ERROR_RATE_LIMIT) {
-        atomic_add_rel_int(&g_error_stats.rate_limited_count, 1);
+    /* Validate parameters */
+    if (!error_info || !sec_context) {
+        guardian_debug_log(&g_security_context, 
+            "Invalid parameters in guardian_error_log");
         return;
     }
-
-    /* Validate severity */
-    if (severity > GUARDIAN_SEV_CRITICAL) {
-        severity = GUARDIAN_SEV_ERROR;
-    }
-
-    /* Get per-CPU buffer */
-    log_buffer = DPCPU_GET(g_error_log_buffer_pcpu);
-    remaining = GUARDIAN_ERROR_LOG_BUFFER_SIZE;
-
-    /* Format base error information with bounds checking */
-    int printed = snprintf(log_buffer, remaining, "[%s:%d][%s] ", 
-                          file ? file : "unknown",
-                          line,
-                          func ? func : "unknown");
     
-    if (printed > 0 && printed < remaining) {
-        remaining -= printed;
-        log_buffer += printed;
-
-        /* Format variable message */
-        va_start(args, fmt);
-        vsnprintf(log_buffer, remaining, fmt, args);
-        va_end(args);
-    }
-
-    /* Update error chain atomically */
-    current_count = atomic_load_acq_int(&g_error_count_pcpu);
-    if (current_count < GUARDIAN_MAX_ERROR_CHAIN) {
-        g_error_chain_pcpu[current_count] = error_code;
-        atomic_add_rel_int(&g_error_count_pcpu, 1);
-    }
-
-    /* Update statistics */
-    atomic_add_rel_int(&g_error_stats.total_errors, 1);
-    atomic_add_rel_int(&g_error_stats.errors_by_severity[severity], 1);
-
-    /* Rate limiting increment */
-    atomic_add_rel_int(&g_error_rate_limit, 1);
-
-    /* Log to kernel log for high severity errors */
-    if (severity >= GUARDIAN_SEV_ERROR) {
-        log(LOG_ERR, "Guardian Error: %s\n", DPCPU_GET(g_error_log_buffer_pcpu));
-    }
-}
-
-/* Clear error state */
-void guardian_error_clear(void) {
+    /* Acquire error mutex */
     mtx_lock(&g_error_mutex);
-
-    /* Clear per-CPU error chain */
-    memset(DPCPU_GET(g_error_chain_pcpu), 0, 
-           sizeof(guardian_error_t) * GUARDIAN_MAX_ERROR_CHAIN);
-    atomic_store_rel_int(&g_error_count_pcpu, 0);
-    memset(DPCPU_GET(g_error_log_buffer_pcpu), 0, GUARDIAN_ERROR_LOG_BUFFER_SIZE);
-
+    
+    /* Validate security context */
+    if (!(sec_context->capabilities & GUARDIAN_CAP_ERROR_LOG)) {
+        mtx_unlock(&g_error_mutex);
+        guardian_debug_log(&g_security_context,
+            "Insufficient privileges for error logging");
+        return;
+    }
+    
+    /* Add error to chain if space available */
+    if (g_error_chain.count < GUARDIAN_MAX_ERROR_CHAIN) {
+        guardian_error_info_t *chain_error = 
+            &g_error_chain.errors[g_error_chain.count++];
+        
+        /* Copy error info with security context */
+        bcopy(error_info, chain_error, sizeof(guardian_error_info_t));
+        chain_error->security_context = *sec_context;
+        chain_error->timestamp = time_second;
+        
+        /* Generate audit trail */
+        snprintf(audit_buffer, sizeof(audit_buffer),
+            "Error logged: code=%d, severity=%d, context=0x%llx",
+            error_info->code, error_info->severity,
+            (unsigned long long)sec_context->security_flags);
+        
+        guardian_audit_log(&g_security_context, audit_buffer);
+        
+        /* Invoke registered handlers */
+        for (size_t i = 0; i < g_handler_count; i++) {
+            if (g_error_handlers[i]) {
+                status = g_error_handlers[i](error_info, sec_context, NULL);
+                if (status != GUARDIAN_SUCCESS) {
+                    guardian_debug_log(&g_security_context,
+                        "Handler %zu failed with status %d", i, status);
+                }
+            }
+        }
+    }
+    
     mtx_unlock(&g_error_mutex);
 }
 
-/* Retrieve error chain */
-guardian_error_t guardian_error_get_chain(
-    guardian_error_t *chain,
-    int *count,
-    uint8_t min_severity) {
+/* Register error handler with security validation */
+guardian_status_t
+guardian_error_register_handler(guardian_error_handler_t handler,
+                              guardian_security_level_t security_level)
+{
+    guardian_status_t status = GUARDIAN_SUCCESS;
     
-    int current_count;
-
-    if (!chain || !count) {
-        return GUARDIAN_E_INVALID_PARAM;
+    /* Validate parameters */
+    if (!handler) {
+        return GUARDIAN_ERROR_INVALID_PARAM;
     }
-
-    /* Get current error count */
-    current_count = atomic_load_acq_int(&g_error_count_pcpu);
-    *count = current_count;
-
-    /* Copy error chain if there are errors */
-    if (current_count > 0) {
-        memcpy(chain, DPCPU_GET(g_error_chain_pcpu),
-               sizeof(guardian_error_t) * current_count);
+    
+    /* Acquire error mutex */
+    mtx_lock(&g_error_mutex);
+    
+    /* Check for available slots */
+    if (g_handler_count >= GUARDIAN_MAX_ERROR_HANDLERS) {
+        status = GUARDIAN_ERROR_QUOTA;
+        goto cleanup;
     }
+    
+    /* Validate security level */
+    if (security_level > GUARDIAN_SECURITY_LEVEL_MAX) {
+        status = GUARDIAN_ERROR_SECURITY;
+        goto cleanup;
+    }
+    
+    /* Register handler */
+    g_error_handlers[g_handler_count++] = handler;
+    
+    /* Log registration */
+    guardian_audit_log(&g_security_context,
+        "Error handler registered at index %zu with security level %d",
+        g_handler_count - 1, security_level);
+    
+cleanup:
+    mtx_unlock(&g_error_mutex);
+    return status;
+}
 
-    return GUARDIAN_SUCCESS;
+/* Clear error chain with security validation */
+guardian_status_t
+guardian_error_clear_chain(guardian_security_context_t *sec_context)
+{
+    guardian_status_t status = GUARDIAN_SUCCESS;
+    
+    /* Validate security context */
+    if (!sec_context) {
+        return GUARDIAN_ERROR_INVALID_PARAM;
+    }
+    
+    /* Acquire error mutex */
+    mtx_lock(&g_error_mutex);
+    
+    /* Check security privileges */
+    if (!(sec_context->capabilities & GUARDIAN_CAP_ERROR_CLEAR)) {
+        status = GUARDIAN_ERROR_PERMISSION;
+        goto cleanup;
+    }
+    
+    /* Clear error chain */
+    explicit_bzero(&g_error_chain.errors,
+                  sizeof(guardian_error_info_t) * GUARDIAN_MAX_ERROR_CHAIN);
+    g_error_chain.count = 0;
+    
+    /* Log clear operation */
+    guardian_audit_log(&g_security_context,
+        "Error chain cleared by security context 0x%llx",
+        (unsigned long long)sec_context->security_flags);
+    
+cleanup:
+    mtx_unlock(&g_error_mutex);
+    return status;
+}
+
+/* Module cleanup */
+void
+guardian_error_cleanup(void)
+{
+    /* Acquire error mutex */
+    mtx_lock(&g_error_mutex);
+    
+    /* Clear handlers and chain */
+    bzero(g_error_handlers, sizeof(g_error_handlers));
+    g_handler_count = 0;
+    explicit_bzero(&g_error_chain, sizeof(g_error_chain_t));
+    
+    /* Destroy mutexes */
+    mtx_unlock(&g_error_mutex);
+    mtx_destroy(&g_error_mutex);
+    mtx_destroy(&g_error_chain.chain_lock);
 }

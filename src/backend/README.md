@@ -1,168 +1,239 @@
 # AI Guardian Backend
 
-Enterprise-grade autonomous security and management system for gaming console platforms.
+Enterprise-grade autonomous security and management system for proprietary gaming console platforms.
+
+Version: 1.0.0
+Rust Version: 1.75+
+FreeBSD Version: 13.0+
+License: Proprietary
 
 ## Overview
 
-AI Guardian is a cutting-edge security solution built on FreeBSD, leveraging Rust's memory safety and Temporal.io for workflow orchestration. The system provides real-time threat detection, autonomous response capabilities, and comprehensive system protection.
+AI Guardian is a high-performance, autonomous security solution built on FreeBSD with Rust's memory-safe architecture and Temporal.io workflow orchestration. The system provides continuous protection through advanced machine learning capabilities and real-time threat detection.
 
 ### Key Features
+
 - Real-time system monitoring and threat detection
-- ML-based anomaly detection and classification
-- Autonomous response orchestration via Temporal.io
-- Secure system state management
-- Performance optimization and resource management
-- Audit logging and compliance reporting
+- Hardware-accelerated ML inference engine
+- FreeBSD kernel-level security integration
+- Temporal.io workflow orchestration
+- Zero-copy memory operations
+- Comprehensive audit logging
 
 ## Prerequisites
 
-### System Requirements
-- FreeBSD 13.2+
-- Rust 1.75+
-- Temporal.io 1.20+
-- Hardware Security Module (HSM) support
-- TPM 2.0 for secure boot
-
-### Development Tools
-- Rust Analyzer
-- LLDB 14+
-- Miri (latest)
-- Cargo 1.75+
+- FreeBSD 13.0+ with:
+  - ZFS support
+  - Hardware security module (HSM)
+  - Trusted Platform Module (TPM)
+- Rust 1.75+ toolchain
+- CUDA toolkit (optional, for GPU acceleration)
+- Temporal.io server
+- StatsD-compatible metrics collector
 
 ## Installation
 
-### 1. FreeBSD Configuration
+1. Clone the repository:
 ```bash
-# Install base dependencies
-pkg install -y rust llvm git cmake protobuf
-
-# Configure system security features
-sysrc kern_securelevel_enable="YES"
-sysrc kern_securelevel="2"
-sysrc pf_enable="YES"
+git clone [repository-url]
+cd guardian/backend
 ```
 
-### 2. Security Setup
+2. Configure system dependencies:
 ```bash
-# Initialize TPM
-tpm2_clear
-tpm2_startup -c
+# Install FreeBSD packages
+pkg install -y \
+  rust \
+  llvm \
+  cmake \
+  protobuf \
+  openssl \
+  pkcs11-helper
 
-# Configure HSM
-pkcs11-tool --init-token --slot 0 --label "guardian-hsm"
-
-# Setup ZFS encryption
-zfs create -o encryption=on -o keylocation=prompt -o keyformat=passphrase guardian/secure
+# Configure ZFS datasets
+zfs create -o encryption=aes-256-gcm -o keylocation=prompt -o keyformat=raw guardian/data
 ```
 
-### 3. Rust Setup
+3. Build the project:
 ```bash
-# Install Rust toolchain
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-rustup default 1.75.0
-rustup component add rustfmt clippy
-
-# Install development tools
-cargo install cargo-audit cargo-tarpaulin cargo-watch
+cargo build --release --features production
 ```
 
-### 4. Build System
+4. Install system service:
 ```bash
-# Clone repository
-git clone https://github.com/your-org/ai-guardian.git
-cd ai-guardian/backend
-
-# Build project
-cargo build --release
-
-# Run tests
-cargo test --all-features
-cargo tarpaulin --all-features
+cp config/guardian.rc /usr/local/etc/rc.d/guardian
+chmod +x /usr/local/etc/rc.d/guardian
+sysrc guardian_enable="YES"
 ```
 
 ## Development
 
-### Project Structure
-```
-src/
-├── core/           # Core system components
-│   ├── guardian.rs # Main system coordinator
-│   ├── metrics.rs  # Performance monitoring
-│   ├── event_bus.rs# Event distribution
-│   └── state.rs    # System state management
-├── ml/             # Machine learning components
-├── security/       # Security implementations
-└── utils/          # Utility modules
-```
+### Environment Setup
 
-### Development Workflow
-1. Create feature branch from `main`
-2. Implement changes following Rust guidelines
-3. Add tests and documentation
-4. Run security checks:
+1. Install development tools:
 ```bash
-cargo audit
-cargo clippy -- -D warnings
-cargo fmt -- --check
+cargo install --force cargo-audit cargo-watch cargo-tarpaulin
 ```
-5. Submit pull request for review
 
-## Deployment
-
-### Production Setup
+2. Configure development environment:
 ```bash
-# Configure system limits
-sysctl kern.maxfiles=1000000
-sysctl kern.maxfilesperproc=800000
-
-# Setup Temporal.io
-temporal server start-dev
-
-# Deploy Guardian
-cargo build --release --features production
-./target/release/guardian --config /etc/guardian/config.toml
+cp .env.example .env
+# Edit .env with your configuration
 ```
 
-### Monitoring Configuration
+3. Start development server:
 ```bash
-# Configure metrics export
-guardian-ctl metrics setup --statsd-host localhost --statsd-port 8125
-
-# Enable security monitoring
-guardian-ctl security monitor --enable-ml --threat-detection
+cargo watch -x 'run --features development'
 ```
+
+### Code Style
+
+- Follow Rust 2021 edition idioms
+- Use `rustfmt` and `clippy` for code formatting and linting
+- Maintain comprehensive documentation with security considerations
+- Implement proper error handling with `GuardianError` types
 
 ## Security
 
-### Key Management
-- X.509 certificates for service authentication
-- HSM-backed key storage
-- Automatic key rotation
-- Secure boot chain verification
+### Authentication & Authorization
 
-### Access Control
+- X.509 certificate-based authentication
 - Role-based access control (RBAC)
-- Mandatory access control (MAC)
-- Multi-factor authentication
-- Audit logging
+- Multi-factor authentication support
+- Hardware security module integration
+- Secure token management
+
+### Data Protection
+
+- AES-256-GCM encryption for data at rest
+- TLS 1.3 for data in transit
+- Zero-copy memory operations
+- Secure memory wiping
+- FIPS 140-3 compliance
+
+### Audit Logging
+
+- Comprehensive security event logging
+- Tamper-evident log storage
+- Real-time log analysis
+- Retention policy enforcement
+- Secure log rotation
 
 ## Performance
 
-### Optimization Guidelines
-- Use async/await for I/O operations
-- Implement circuit breakers for fault tolerance
-- Batch metrics collection
-- Enable adaptive sampling
+### Hardware Acceleration
 
-### Monitoring Setup
+- GPU acceleration for ML inference
+- SIMD optimization for feature extraction
+- Zero-copy operations
+- Memory-mapped I/O
+- Hardware-specific optimizations
+
+### Resource Management
+
+- Adaptive batch processing
+- Memory pooling
+- Cache optimization
+- Circuit breaker protection
+- Performance monitoring
+
+## Testing
+
+Run the test suite:
 ```bash
-# Configure performance monitoring
-guardian-ctl monitor setup \
-    --metrics-interval 5s \
-    --health-check-interval 1s \
-    --resource-metrics
+# Run unit tests
+cargo test
+
+# Run integration tests
+cargo test --features integration
+
+# Generate coverage report
+cargo tarpaulin --out Html
 ```
+
+## Deployment
+
+### Production Configuration
+
+1. Configure security settings:
+```bash
+# Generate encryption keys
+guardian-ctl keys generate
+
+# Configure HSM
+guardian-ctl hsm setup
+
+# Initialize secure storage
+guardian-ctl storage init
+```
+
+2. Deploy system components:
+```bash
+# Deploy core services
+guardian-ctl deploy core
+
+# Initialize ML models
+guardian-ctl ml init
+
+# Start monitoring
+guardian-ctl monitor start
+```
+
+### Health Checks
+
+Monitor system health:
+```bash
+guardian-ctl status
+guardian-ctl metrics show
+guardian-ctl security audit
+```
+
+## Monitoring
+
+### Metrics Collection
+
+- System performance metrics
+- Security event monitoring
+- ML model performance tracking
+- Resource utilization
+- Health status monitoring
+
+### Alerting
+
+- Real-time threat detection
+- Performance degradation alerts
+- Resource exhaustion warnings
+- Security incident notifications
+- System health status
+
+## Documentation
+
+- [Architecture Overview](docs/ARCHITECTURE.md)
+- [API Documentation](docs/API.md)
+- [Security Guide](docs/SECURITY.md)
+- [ML System](docs/ML.md)
+
+## Troubleshooting
+
+### Common Issues
+
+1. Performance Degradation
+   - Check system resources
+   - Verify ML model performance
+   - Monitor memory usage
+   - Review circuit breaker status
+
+2. Security Alerts
+   - Check audit logs
+   - Verify HSM status
+   - Review access patterns
+   - Monitor threat detection
+
+### Support
+
+For security issues: security@aiguardian.system
+For general support: support@aiguardian.system
 
 ## License
 
-Copyright © 2024 AI Guardian Team. All rights reserved.
+Proprietary - All rights reserved
