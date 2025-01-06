@@ -1,0 +1,115 @@
+# Elasticsearch Configuration for AI Guardian System
+# Version: 8.11.0 (elasticsearch)
+# Version: 8.11.0 (x-pack-security)
+
+# ---------------------------------- Cluster -----------------------------------
+cluster.name: guardian-elasticsearch
+node.name: ${HOSTNAME}
+
+# ---------------------------------- Network ----------------------------------
+network.host: 0.0.0.0
+http.port: 9200
+transport.port: 9300
+
+# --------------------------------- Discovery ---------------------------------
+discovery.seed_hosts: ${SEED_HOSTS}
+cluster.initial_master_nodes: ${INITIAL_MASTERS}
+
+# ---------------------------------- Node Roles -------------------------------
+node.master: true
+node.data: true
+node.ingest: true
+node.ml: true
+node.transform: true
+
+# ---------------------------------- Security --------------------------------
+xpack.security.enabled: true
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.verification_mode: certificate
+xpack.security.transport.ssl.keystore.path: ${ES_KEYSTORE_PATH}
+xpack.security.transport.ssl.truststore.path: ${ES_TRUSTSTORE_PATH}
+
+# Audit logging configuration
+xpack.security.audit.enabled: true
+xpack.security.audit.logfile.events.include: 
+  - authentication_success
+  - authentication_failure
+  - access_denied
+  - connection_denied
+
+# Authentication settings
+xpack.security.authc.api_key.enabled: true
+xpack.security.authc.token.enabled: true
+xpack.security.http.ssl.enabled: true
+
+# ---------------------------------- Indices ---------------------------------
+action.auto_create_index: .monitoring-*,.security-*,guardian-*,.ml-*
+indices.recovery.max_bytes_per_sec: 80mb
+indices.memory.index_buffer_size: 40%
+indices.breaker.total.limit: 75%
+indices.breaker.request.limit: 60%
+indices.breaker.fielddata.limit: 50%
+
+# ---------------------------------- Memory ----------------------------------
+bootstrap.memory_lock: true
+indices.queries.cache.size: 10%
+indices.fielddata.cache.size: 20%
+
+# -------------------------------- Thread Pools -----------------------------
+thread_pool.write.size: 32
+thread_pool.write.queue_size: 1000
+thread_pool.search.size: 24
+thread_pool.search.queue_size: 2000
+thread_pool.get.size: 16
+thread_pool.get.queue_size: 1000
+thread_pool.bulk.size: 16
+thread_pool.bulk.queue_size: 1000
+
+# -------------------------------- Monitoring ------------------------------
+xpack.monitoring.collection.enabled: true
+xpack.monitoring.collection.interval: 10s
+xpack.monitoring.history.duration: 7d
+xpack.monitoring.collection.cluster.stats.timeout: 10s
+xpack.monitoring.collection.node.stats.timeout: 10s
+xpack.monitoring.collection.index.stats.timeout: 10s
+xpack.monitoring.collection.ml.job.stats.timeout: 10s
+
+# -------------------------------- Index Templates -------------------------
+# System logs template
+index.template.guardian-system:
+  index_patterns: guardian-system-*
+  settings:
+    number_of_shards: 3
+    number_of_replicas: 2
+    refresh_interval: 5s
+    index.routing.allocation.total_shards_per_node: 2
+    index.mapping.total_fields.limit: 2000
+    index.mapping.depth.limit: 20
+
+# Security events template
+index.template.guardian-security:
+  index_patterns: guardian-security-*
+  settings:
+    number_of_shards: 5
+    number_of_replicas: 3
+    refresh_interval: 1s
+    index.routing.allocation.total_shards_per_node: 3
+    index.mapping.total_fields.limit: 3000
+    index.mapping.depth.limit: 30
+    index.priority: 100
+
+# ML metrics template
+index.template.guardian-ml:
+  index_patterns: guardian-ml-*
+  settings:
+    number_of_shards: 2
+    number_of_replicas: 2
+    refresh_interval: 10s
+    index.routing.allocation.total_shards_per_node: 1
+    index.mapping.total_fields.limit: 1500
+    index.mapping.depth.limit: 15
+
+# -------------------------------- Disk Allocation -------------------------
+cluster.routing.allocation.disk.threshold_enabled: true
+cluster.routing.allocation.disk.watermark.low: 85%
+cluster.routing.allocation.disk.watermark.high: 90%
