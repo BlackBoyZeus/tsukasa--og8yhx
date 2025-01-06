@@ -1,0 +1,143 @@
+{{/* Service template for AI Guardian system with FreeBSD security features */}}
+
+{{/* Backend Service */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "guardian.fullname" . }}-backend
+  labels:
+    {{- include "guardian.labels" . | nindent 4 }}
+    service.guardian.io/component: backend
+  annotations:
+    security.guardian.io/capsicum-enabled: "true"
+    security.guardian.io/tpm-attestation: "true"
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+spec:
+  type: {{ .Values.backend.type | default "ClusterIP" }}
+  ports:
+    - name: http
+      port: {{ .Values.backend.ports.http }}
+      targetPort: {{ .Values.backend.ports.http }}
+      protocol: TCP
+      appProtocol: https
+    - name: grpc
+      port: {{ .Values.backend.ports.grpc }}
+      targetPort: {{ .Values.backend.ports.grpc }}
+      protocol: TCP
+      appProtocol: https
+    - name: metrics
+      port: {{ .Values.backend.metrics.port }}
+      targetPort: {{ .Values.backend.metrics.port }}
+      protocol: TCP
+      appProtocol: https
+  selector:
+    {{- include "guardian.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+  securityContext:
+    {{- with .Values.backend.securityContext }}
+    capsicum:
+      enabled: {{ .capsicum.enabled }}
+      capabilities:
+        {{- range .capsicum.capabilities }}
+        - {{ . }}
+        {{- end }}
+    tpm:
+      attestation: {{ .tpm.attestation }}
+      pcr:
+        {{- range .tpm.pcr }}
+        - {{ . }}
+        {{- end }}
+    {{- end }}
+
+---
+{{/* Temporal.io Service */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "guardian.fullname" . }}-temporal
+  labels:
+    {{- include "guardian.labels" . | nindent 4 }}
+    service.guardian.io/component: temporal
+  annotations:
+    security.guardian.io/capsicum-enabled: "true"
+    security.guardian.io/tpm-attestation: "true"
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+spec:
+  type: {{ .Values.temporal.type | default "ClusterIP" }}
+  ports:
+    - name: grpc
+      port: 7233
+      targetPort: 7233
+      protocol: TCP
+      appProtocol: https
+    - name: metrics
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+      appProtocol: https
+  selector:
+    {{- include "guardian.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal
+  securityContext:
+    {{- with .Values.temporal.securityContext }}
+    capsicum:
+      enabled: {{ .capsicum.enabled }}
+      capabilities:
+        {{- range .capsicum.capabilities }}
+        - {{ . }}
+        {{- end }}
+    tpm:
+      attestation: {{ .tpm.attestation }}
+      pcr:
+        {{- range .tpm.pcr }}
+        - {{ . }}
+        {{- end }}
+    {{- end }}
+
+---
+{{/* Monitoring Service */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "guardian.fullname" . }}-monitoring
+  labels:
+    {{- include "guardian.labels" . | nindent 4 }}
+    service.guardian.io/component: monitoring
+  annotations:
+    security.guardian.io/capsicum-enabled: "true"
+    security.guardian.io/tpm-attestation: "true"
+spec:
+  type: {{ .Values.monitoring.type | default "ClusterIP" }}
+  ports:
+    - name: prometheus
+      port: 9090
+      targetPort: 9090
+      protocol: TCP
+      appProtocol: https
+    - name: grafana
+      port: 3000
+      targetPort: 3000
+      protocol: TCP
+      appProtocol: https
+  selector:
+    {{- include "guardian.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: monitoring
+  securityContext:
+    {{- with .Values.monitoring.securityContext }}
+    capsicum:
+      enabled: {{ .capsicum.enabled }}
+      capabilities:
+        {{- range .capsicum.capabilities }}
+        - {{ . }}
+        {{- end }}
+    tpm:
+      attestation: {{ .tpm.attestation }}
+      pcr:
+        {{- range .tpm.pcr }}
+        - {{ . }}
+        {{- end }}
+    {{- end }}
