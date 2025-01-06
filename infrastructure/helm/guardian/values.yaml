@@ -1,0 +1,166 @@
+# Default configuration values for the AI Guardian Helm chart
+# Version: 1.0.0
+
+# Global configuration values shared across all components
+global:
+  namespace: guardian-system
+  image:
+    registry: guardian.io
+    pullPolicy: Always
+    tag: 1.0.0
+  security:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    runAsNonRoot: true
+    readOnlyRootFilesystem: true
+    capsicum:
+      enabled: true
+      capabilities:
+        - CAP_NET_BIND_SERVICE
+        - CAP_SYS_PTRACE
+    seccompProfile:
+      type: RuntimeDefault
+    tpm:
+      enabled: true
+      devicePath: /dev/tpm0
+  freebsd:
+    kernelModules:
+      - zfs
+      - capsicum
+      - tpm
+    sysctls:
+      kern.securelevel: "2"
+      security.bsd.unprivileged_proc_debug: "0"
+
+# Backend service configuration
+backend:
+  enabled: true
+  replicaCount: 3
+  image:
+    repository: guardian-backend
+    tag: 1.0.0
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  ports:
+    http: 8080
+    grpc: 9090
+  healthCheck:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+  metrics:
+    enabled: true
+    port: 8080
+    path: /metrics
+    scrapeInterval: "15s"
+    retention: "30d"
+  zfs:
+    enabled: true
+    dataset: zroot/guardian
+    compression: lz4
+    encryption: aes-256-gcm
+
+# Temporal.io workflow engine configuration
+temporal:
+  enabled: true
+  server:
+    replicaCount: 3
+    image:
+      repository: temporalio/server
+      tag: 1.20.0
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+    security:
+      encryption:
+        enabled: true
+        provider: hsm
+        keyPath: /etc/temporal/keys
+      tls:
+        enabled: true
+        certPath: /etc/temporal/certs
+  workers:
+    replicaCount: 3
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+    autoscaling:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 70
+
+# Monitoring configuration
+monitoring:
+  prometheus:
+    enabled: true
+    serverFiles:
+      scrape_configs:
+        - job_name: guardian-backend
+          scrape_interval: "15s"
+          static_configs:
+            - targets:
+                - guardian-backend:8080
+      alerting_rules:
+        groups:
+          - name: guardian.rules
+            rules:
+              - alert: HighCPUUsage
+                expr: cpu_usage > 80
+                for: 5m
+                severity: warning
+              - alert: HighMemoryUsage
+                expr: memory_usage > 85
+                for: 5m
+                severity: warning
+    retention: "30d"
+    storage:
+      tsdb:
+        path: /prometheus
+        retention:
+          time: "30d"
+          size: "50GB"
+  grafana:
+    enabled: true
+    adminPassword: changeme
+    datasources:
+      datasources.yaml:
+        apiVersion: 1
+        datasources:
+          - name: Prometheus
+            type: prometheus
+            url: http://prometheus-server
+            access: proxy
+            isDefault: true
+            jsonData:
+              timeInterval: "15s"
+    dashboardProviders:
+      dashboardproviders.yaml:
+        apiVersion: 1
+        providers:
+          - name: default
+            orgId: 1
+            folder: ""
+            type: file
+            disableDeletion: true
+            editable: false
+            options:
+              path: /var/lib/grafana/dashboards
