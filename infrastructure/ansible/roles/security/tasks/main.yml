@@ -1,0 +1,206 @@
+---
+# AI Guardian Security Configuration Tasks
+# Version: 1.0.0
+# Requires: ansible-core >= 2.15, ansible.posix >= 1.5
+
+- name: Validate system requirements
+  ansible.builtin.assert:
+    that:
+      - "ansible_system == 'FreeBSD'"
+      - "ansible_distribution_version is version('13.0', '>=')"
+    msg: "System must be FreeBSD 13.0 or higher"
+    quiet: no
+  tags: 
+    - security
+    - validation
+
+- name: Install required security packages
+  ansible.builtin.pkg:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - geli
+    - ca_root_nss
+    - sudo
+    - audit
+    - security/openssl
+    - security/gnupg
+  register: pkg_install
+  until: pkg_install is success
+  retries: 3
+  delay: 5
+  tags:
+    - security
+    - packages
+
+- name: Configure Capsicum capability mode
+  block:
+    - name: Enable Capsicum in loader.conf
+      ansible.builtin.lineinfile:
+        path: /boot/loader.conf
+        line: "security.capability_mode=1"
+        create: yes
+        mode: '0644'
+        validate: '/usr/sbin/configtest %s'
+      notify: restart_system
+    
+    - name: Configure Capsicum policies
+      ansible.builtin.template:
+        src: capsicum_policy.j2
+        dest: /etc/security/capsicum.conf
+        mode: '0600'
+        validate: '/usr/sbin/capsicumtest -c %s'
+  rescue:
+    - name: Log Capsicum configuration failure
+      ansible.builtin.debug:
+        msg: "Failed to configure Capsicum"
+    - name: Fail on Capsicum configuration error
+      ansible.builtin.fail:
+        msg: "Critical: Capsicum configuration failed"
+  tags:
+    - security
+    - capsicum
+
+- name: Configure MAC framework
+  block:
+    - name: Deploy MAC policy configuration
+      ansible.builtin.template:
+        src: mac_policy.conf.j2
+        dest: /etc/security/mac.conf
+        mode: '0600'
+        validate: '/usr/sbin/mactest -c %s'
+      vars:
+        security_level: "{{ security_level | default('high') }}"
+    
+    - name: Enable MAC modules
+      ansible.builtin.lineinfile:
+        path: /boot/loader.conf
+        line: "{{ item }}"
+      loop:
+        - "mac_bsdextended_load=YES"
+        - "mac_portacl_load=YES"
+        - "mac_seeotheruids_load=YES"
+  tags:
+    - security
+    - mac
+
+- name: Configure GELI encryption
+  block:
+    - name: Setup GELI encryption
+      ansible.builtin.command:
+        cmd: "geli init -s 4096 -l 256 {{ item }}"
+      loop: "{{ encrypted_devices }}"
+      when: encrypted_devices is defined
+      register: geli_init
+      changed_when: geli_init.rc == 0
+      failed_when: geli_init.rc != 0 and 'already configured' not in geli_init.stderr
+    
+    - name: Configure encryption key rotation
+      ansible.builtin.cron:
+        name: "GELI key rotation"
+        special_time: monthly
+        job: "/usr/local/sbin/geli_rotate_keys.sh"
+        user: root
+  vars:
+    encryption_key_rotation_days: "{{ encryption_key_rotation_days | default(90) }}"
+  tags:
+    - security
+    - encryption
+
+- name: Configure audit framework
+  block:
+    - name: Deploy audit rules
+      ansible.builtin.template:
+        src: audit.rules.j2
+        dest: /etc/security/audit.rules
+        mode: '0600'
+        validate: '/usr/sbin/auditctl -R %s'
+      notify: restart_audit
+    
+    - name: Enable audit service
+      ansible.builtin.service:
+        name: auditd
+        state: started
+        enabled: yes
+  tags:
+    - security
+    - audit
+
+- name: System hardening measures
+  block:
+    - name: Configure secure kernel parameters
+      ansible.builtin.sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+      loop:
+        - { name: 'security.bsd.see_other_uids', value: '0' }
+        - { name: 'security.bsd.see_other_gids', value: '0' }
+        - { name: 'security.bsd.unprivileged_read_msgbuf', value: '0' }
+        - { name: 'security.bsd.stack_guard_page', value: '1' }
+        - { name: 'security.bsd.hardlink_check_uid', value: '1' }
+        - { name: 'security.bsd.hardlink_check_gid', value: '1' }
+    
+    - name: Configure secure file permissions
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        mode: "{{ item.mode }}"
+        owner: "{{ item.owner | default('root') }}"
+        group: "{{ item.group | default('wheel') }}"
+      loop:
+        - { path: '/etc/rc.conf', mode: '0600' }
+        - { path: '/etc/sysctl.conf', mode: '0600' }
+        - { path: '/etc/security', mode: '0700' }
+  tags:
+    - security
+    - hardening
+
+- name: Security validation checks
+  block:
+    - name: Validate security configurations
+      ansible.builtin.command:
+        cmd: "{{ item }}"
+      loop:
+        - "/usr/sbin/capsicumtest"
+        - "/usr/sbin/mactest"
+        - "/usr/sbin/auditctl -l"
+      register: security_validation
+      changed_when: false
+      failed_when: false
+    
+    - name: Generate security report
+      ansible.builtin.template:
+        src: security_report.j2
+        dest: /var/log/security/validation_report.txt
+        mode: '0600'
+  tags:
+    - security
+    - validation
+
+handlers:
+  - name: restart_audit
+    block:
+      - name: Restart audit service
+        ansible.builtin.service:
+          name: auditd
+          state: restarted
+      
+      - name: Wait for audit service
+        ansible.builtin.wait_for:
+          path: /var/run/auditd.pid
+          state: present
+          timeout: 30
+    rescue:
+      - name: Log audit restart failure
+        ansible.builtin.debug:
+          msg: "Failed to restart audit service"
+      - name: Fail on audit restart error
+        ansible.builtin.fail:
+          msg: "Critical: Audit service restart failed"
+
+  - name: restart_system
+    ansible.builtin.reboot:
+      msg: "Rebooting system for security configuration changes"
+      pre_reboot_delay: 5
+      post_reboot_delay: 30
+      test_command: uptime
