@@ -1,0 +1,111 @@
+target/**/*
+coverage/
+.cargo/
+node_modules/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.hypothesis/
+debug/
+
+# Development Files
+.rustfmt.toml
+rustfmt.toml
+clippy.toml
+*.rs.bk
+*.log
+*.sh
+*.example
+*.test
+*.bak
+*.swp
+*.swo
+
+# Security Sensitive Files
+**/*.key
+**/*.pem
+**/*.crt
+**/*.p12
+**/*_rsa
+**/*.password
+**/*.secret
+.env
+.env.*
+
+# Version Control
+.git/
+.github/
+.gitignore
+
+# Docker Files
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# IDE and Editor
+.vscode/
+.idea/
+*.sublime-*
+.project
+.settings/
+
+# Documentation and Assets
+docs/
+assets/
+documentation/
+examples/
+samples/
+*.md
+
+# Test Directories
+tests/
+benches/
+scripts/
+
+# Temporary and Cache Files
+*.tmp
+*.temp
+.cache/
+tmp/
+
+# OS Generated Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Dependency Lock Files
+Cargo.lock
+package-lock.json
+yarn.lock
+poetry.lock
+
+# Profiling and Debug Data
+*.prof
+*.heap
+*.cpu
+core.*
+
+# Database Files
+*.db
+*.sqlite
+*.sqlite3
+
+# Backup Files
+**/*~
+**/*.orig
+**/*.old
+
+# Generated Files
+dist/
+build/
+generated/
+*.generated.*
+
+# Local Development Configs
+config.local.*
+*.local.*
+local.*
