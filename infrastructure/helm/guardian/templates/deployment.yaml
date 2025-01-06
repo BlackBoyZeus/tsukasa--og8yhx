@@ -1,0 +1,162 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "guardian.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "guardian.labels" . | nindent 4 }}
+  annotations:
+    freebsd.org/version: {{ .Values.global.freebsd.version | quote }}
+    guardian.security/tpm-required: {{ .Values.global.security.tpm.enabled | quote }}
+    guardian.security/capsicum-enabled: {{ .Values.global.security.capsicum.enabled | quote }}
+    guardian.security/secure-level: {{ .Values.global.freebsd.sysctls.kern\.securelevel | quote }}
+spec:
+  replicas: {{ .Values.backend.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "guardian.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "guardian.selectorLabels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: {{ .Values.backend.metrics.enabled | quote }}
+        prometheus.io/port: {{ .Values.backend.metrics.port | quote }}
+        prometheus.io/path: {{ .Values.backend.metrics.path | quote }}
+        guardian.security/tpm-verification: {{ .Values.global.security.tpm.enabled | quote }}
+        guardian.security/capsicum-enabled: {{ .Values.global.security.capsicum.enabled | quote }}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "guardian.serviceAccountName" . }}
+      securityContext:
+        runAsUser: {{ .Values.global.security.runAsUser }}
+        runAsGroup: {{ .Values.global.security.runAsGroup }}
+        fsGroup: {{ .Values.global.security.fsGroup }}
+        runAsNonRoot: true
+        readOnlyRootFilesystem: true
+        seccompProfile:
+          type: {{ .Values.global.security.seccompProfile.type }}
+        {{- if .Values.global.security.capsicum.enabled }}
+        capsicum:
+          enabled: true
+          capabilities:
+            {{- range .Values.global.security.capsicum.capabilities }}
+            - {{ . }}
+            {{- end }}
+        {{- end }}
+      containers:
+        - name: guardian-backend
+          image: "{{ .Values.global.image.registry }}/{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - NET_BIND_SERVICE
+          env:
+            - name: FREEBSD_VERSION
+              value: {{ .Values.global.freebsd.version | quote }}
+            - name: TPM_DEVICE_PATH
+              value: {{ .Values.global.security.tpm.devicePath | quote }}
+            - name: CAPSICUM_ENABLED
+              value: {{ .Values.global.security.capsicum.enabled | quote }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: http
+              containerPort: {{ .Values.backend.ports.http }}
+              protocol: TCP
+            - name: grpc
+              containerPort: {{ .Values.backend.ports.grpc }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.backend.metrics.port }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.backend.healthCheck.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.backend.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.backend.healthCheck.periodSeconds }}
+            timeoutSeconds: {{ .Values.backend.healthCheck.timeoutSeconds }}
+            failureThreshold: {{ .Values.backend.healthCheck.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.backend.healthCheck.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.backend.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.backend.healthCheck.periodSeconds }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/guardian/config
+              readOnly: true
+            - name: secrets
+              mountPath: /etc/guardian/secrets
+              readOnly: true
+            - name: temporal-certs
+              mountPath: /etc/guardian/temporal
+              readOnly: true
+            {{- if .Values.global.security.tpm.enabled }}
+            - name: tpm
+              mountPath: {{ .Values.global.security.tpm.devicePath }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.backend.zfs.enabled }}
+            - name: zfs-dataset
+              mountPath: /data
+            {{- end }}
+            - name: freebsd-kernel
+              mountPath: /boot/kernel
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "guardian.fullname" . }}-config
+        - name: secrets
+          secret:
+            secretName: {{ include "guardian.fullname" . }}-secrets
+        - name: temporal-certs
+          secret:
+            secretName: {{ include "guardian.fullname" . }}-temporal-certs
+        {{- if .Values.global.security.tpm.enabled }}
+        - name: tpm
+          hostPath:
+            path: {{ .Values.global.security.tpm.devicePath }}
+            type: CharDevice
+        {{- end }}
+        {{- if .Values.backend.zfs.enabled }}
+        - name: zfs-dataset
+          persistentVolumeClaim:
+            claimName: {{ include "guardian.fullname" . }}-data
+        {{- end }}
+        - name: freebsd-kernel
+          hostPath:
+            path: /boot/kernel
+            type: Directory
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
