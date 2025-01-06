@@ -1,174 +1,171 @@
-//! AI Guardian System - Main Entry Point
-//! 
-//! Initializes and coordinates the core runtime, logging, monitoring, and system services
-//! for the AI Guardian security and management solution.
-//! 
-//! Version: 1.0.0
-//! Dependencies:
-//! - tokio v1.32
-//! - tracing v0.1
-//! - tracing-subscriber v0.3
-//! - clap v4.0
+use std::{sync::Arc, time::Duration};
+use tokio::signal;
+use tracing::{debug, error, info, warn, instrument};
+use metrics::{counter, gauge};
+use uuid::Uuid;
 
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::signal::unix::{signal, SignalKind};
-use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
-use clap::{Command, Arg, ArgAction};
+use guardian_lib::{Guardian, GuardianConfig};
+use config::app_config::AppConfig;
+use cli::run_cli;
+use security::{SecurityContext, SecurityConfig};
 
-use guardian::{Guardian, Result};
-use crate::config::app_config::AppConfig;
-use crate::cli::run_cli;
-
-// System version and metadata constants
+// Core system constants
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const AUTHOR: &str = "Guardian Security Team";
-const DEFAULT_CONFIG_PATH: &str = "/etc/guardian/config.toml";
-
-// Operational constants
+const APP_NAME: &str = "guardian";
+const CONFIG_PATH: &str = "config/guardian.toml";
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
-const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(5);
-const MAX_STARTUP_RETRIES: u32 = 3;
+const MAX_MEMORY_PERCENT: f64 = 5.0;
 
-/// Initializes the logging and tracing system with security context
-async fn setup_logging() -> Result<()> {
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .with_target(true)
-        .with_thread_ids(true)
-        .with_file(true)
-        .with_line_number(true)
-        .with_env_filter("guardian=debug,warn")
-        .json()
-        .with_current_span(true)
-        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
-        .try_init();
+/// Main entry point for the Guardian system
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+#[tracing::instrument(name = "guardian_main", err)]
+async fn main() -> Result<(), GuardianError> {
+    let correlation_id = Uuid::new_v4();
+    info!(
+        version = VERSION,
+        correlation_id = %correlation_id,
+        "Starting AI Guardian system"
+    );
 
-    match subscriber {
-        Ok(_) => {
-            info!("Logging system initialized successfully");
-            Ok(())
-        }
-        Err(e) => {
-            eprintln!("Failed to initialize logging: {}", e);
-            Err(guardian::GuardianError::SystemError(
-                "Logging initialization failed".to_string(),
-            ))
-        }
-    }
-}
-
-/// Creates the command-line interface configuration
-fn create_cli() -> Command {
-    Command::new("guardian")
-        .version(VERSION)
-        .author(AUTHOR)
-        .about("AI Guardian Security System")
-        .arg(
-            Arg::new("config")
-                .short('c')
-                .long("config")
-                .value_name("FILE")
-                .help("Path to configuration file")
-                .default_value(DEFAULT_CONFIG_PATH),
-        )
-        .arg(
-            Arg::new("verbose")
-                .short('v')
-                .long("verbose")
-                .action(ArgAction::Count)
-                .help("Increases logging verbosity"),
-        )
-}
-
-/// Main entry point with comprehensive security and monitoring
-#[tokio::main]
-async fn main() -> Result<()> {
-    // Parse command line arguments
-    let matches = create_cli().get_matches();
-    let config_path = matches.get_one::<String>("config").unwrap();
-    
-    // Initialize logging with security context
-    setup_logging().await?;
-    info!(version = VERSION, "Starting AI Guardian System");
+    // Initialize security context
+    let security_ctx = SecurityContext::new().map_err(|e| GuardianError::SecurityError {
+        context: "Failed to initialize security context".into(),
+        source: Some(Box::new(e)),
+        severity: crate::utils::error::ErrorSeverity::Critical,
+        timestamp: time::OffsetDateTime::now_utc(),
+        correlation_id,
+        category: crate::utils::error::ErrorCategory::Security,
+        retry_count: 0,
+    })?;
 
     // Load and validate configuration
-    let app_config = match AppConfig::new(Some(config_path.to_string()), None) {
-        Ok(config) => {
-            debug!("Configuration loaded successfully");
-            config
-        }
-        Err(e) => {
-            error!("Failed to load configuration: {}", e);
-            return Err(e);
-        }
+    let config = AppConfig::load(std::path::PathBuf::from(CONFIG_PATH))?;
+    config.validate()?;
+
+    // Initialize tracing with security context
+    init_tracing(&config, &security_ctx)?;
+
+    // Initialize core Guardian system
+    let guardian_config = GuardianConfig {
+        app_name: APP_NAME.to_string(),
+        version: VERSION.to_string(),
+        environment: config.environment,
+        max_threads: config.max_threads,
+        max_memory: config.max_memory,
+        security_settings: config.security_settings,
+        monitoring_config: config.monitoring_config,
     };
 
-    // Initialize Guardian system
-    let guardian = Arc::new(RwLock::new(
-        Guardian::new(
-            Arc::new(RwLock::new(
-                app_config.security_config.clone()
-            )),
-            app_config.clone(),
-        ).await?,
-    ));
-    
-    // Start health monitoring
-    let health_guardian = guardian.clone();
-    tokio::spawn(async move {
-        loop {
-            if let Err(e) = health_guardian.read().await.check_health().await {
-                error!("Health check failed: {}", e);
-            }
-            tokio::time::sleep(HEALTH_CHECK_INTERVAL).await;
-        }
-    });
+    let guardian = Guardian::new(guardian_config)?;
+    guardian.start().await?;
 
-    // Set up signal handlers
-    let mut sigterm = signal(SignalKind::terminate())?;
-    let mut sigint = signal(SignalKind::interrupt())?;
-    
-    // Start CLI handler
-    let cli_guardian = guardian.clone();
-    tokio::spawn(async move {
-        if let Err(e) = run_cli(std::env::args().collect()) {
-            error!("CLI error: {}", e);
-        }
-    });
+    // Record startup metrics
+    counter!("guardian.system.starts", 1);
+    gauge!("guardian.system.max_memory_mb", config.max_memory as f64);
+
+    // Handle CLI mode if specified
+    if std::env::args().any(|arg| arg == "--cli") {
+        run_cli().await?;
+        return Ok(());
+    }
+
+    // Wait for shutdown signal
+    shutdown_signal(guardian, security_ctx).await?;
+
+    info!("Guardian system shutdown complete");
+    Ok(())
+}
+
+/// Initializes the tracing system with security context
+#[instrument(skip(config, security_ctx), err)]
+fn init_tracing(config: &AppConfig, security_ctx: &SecurityContext) -> Result<(), GuardianError> {
+    use tracing_subscriber::{
+        fmt::{self, time::UtcTime},
+        EnvFilter,
+        layer::SubscriberExt,
+        util::SubscriberInitExt,
+    };
+
+    // Validate security context before initializing tracing
+    security_ctx.validate()?;
+
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let formatting_layer = fmt::layer()
+        .with_target(true)
+        .with_thread_ids(true)
+        .with_line_number(true)
+        .with_timer(UtcTime::rfc_3339())
+        .with_file(true);
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(formatting_layer)
+        .try_init()
+        .map_err(|e| GuardianError::SystemError {
+            context: "Failed to initialize tracing".into(),
+            source: Some(Box::new(e)),
+            severity: crate::utils::error::ErrorSeverity::Critical,
+            timestamp: time::OffsetDateTime::now_utc(),
+            correlation_id: Uuid::new_v4(),
+            category: crate::utils::error::ErrorCategory::System,
+            retry_count: 0,
+        })?;
+
+    Ok(())
+}
+
+/// Handles system shutdown signals with graceful cleanup
+#[instrument(skip(guardian, security_ctx), err)]
+async fn shutdown_signal(guardian: Guardian, security_ctx: SecurityContext) -> Result<(), GuardianError> {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("Failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
 
     // Wait for shutdown signal
     tokio::select! {
-        _ = sigterm.recv() => {
-            info!("Received SIGTERM signal");
+        _ = ctrl_c => {
+            info!("Received Ctrl+C signal");
         }
-        _ = sigint.recv() => {
-            info!("Received SIGINT signal");
+        _ = terminate => {
+            info!("Received termination signal");
         }
     }
 
-    // Perform graceful shutdown
+    // Initiate graceful shutdown
     info!("Initiating graceful shutdown");
-    let shutdown_result = tokio::time::timeout(
-        SHUTDOWN_TIMEOUT,
-        guardian.read().await.shutdown()
-    ).await;
+    counter!("guardian.system.shutdowns", 1);
 
-    match shutdown_result {
-        Ok(Ok(_)) => {
-            info!("Guardian system shutdown completed successfully");
-            Ok(())
-        }
-        Ok(Err(e)) => {
-            error!("Error during shutdown: {}", e);
-            Err(e)
-        }
+    // Verify security context before shutdown
+    security_ctx.validate()?;
+
+    // Perform health check before shutdown
+    if let Err(e) = guardian.health_check().await {
+        warn!(error = ?e, "Health check failed during shutdown");
+    }
+
+    // Shutdown with timeout
+    match tokio::time::timeout(SHUTDOWN_TIMEOUT, guardian.shutdown()).await {
+        Ok(result) => result?,
         Err(_) => {
             error!("Shutdown timed out after {:?}", SHUTDOWN_TIMEOUT);
-            Err(guardian::GuardianError::SystemError(
-                "Shutdown timed out".to_string(),
-            ))
+            counter!("guardian.system.shutdown_timeouts", 1);
         }
     }
+
+    Ok(())
 }
