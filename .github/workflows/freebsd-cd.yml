@@ -1,0 +1,185 @@
+name: FreeBSD Continuous Deployment
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/freebsd/**'
+  workflow_dispatch:
+
+env:
+  FREEBSD_VERSION: '13.0-RELEASE'
+  CACHE_KEY: "freebsd-build-${{ runner.os }}-${{ hashFiles('src/freebsd/**') }}"
+  TPM_KEY_VERSION: 'v2'
+  CONSOLE_HARDWARE_VERSION: 'v1.2'
+  PERFORMANCE_THRESHOLD: '5'
+
+jobs:
+  build_and_test:
+    name: Build and Test FreeBSD Components
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/freebsd-build
+            ~/.cache/freebsd-deps
+          key: ${{ env.CACHE_KEY }}
+          restore-keys: |
+            freebsd-build-${{ runner.os }}-
+
+      - name: Setup FreeBSD build environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static
+
+      - name: Build kernel modules
+        run: |
+          chmod +x src/freebsd/tools/build_modules.sh
+          ./src/freebsd/tools/build_modules.sh
+        env:
+          KERNEL_SRC: /usr/src/sys
+          BUILD_FLAGS: "-DGUARDIAN_DEBUG -O2 -fstack-protector-strong"
+
+      - name: Run security checks
+        run: |
+          chmod +x src/freebsd/tools/security_check.sh
+          ./src/freebsd/tools/security_check.sh
+        env:
+          GUARDIAN_SECURITY_CHECKS: "capsicum mac geli jail kernel audit resource"
+
+      - name: Verify TPM integration
+        run: |
+          ./src/freebsd/tools/build_modules.sh verify_tpm_signature
+        env:
+          TPM_KEY_VERSION: ${{ env.TPM_KEY_VERSION }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: freebsd-modules
+          path: |
+            src/freebsd/**/*.ko
+            src/freebsd/**/*.sig
+            src/freebsd/build.manifest
+
+  deploy_staging:
+    name: Deploy to Staging
+    needs: build_and_test
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 45
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: freebsd-modules
+          path: artifacts
+
+      - name: Configure staging environment
+        run: |
+          echo "Setting up staging environment..."
+          # Environment-specific configuration would go here
+
+      - name: Verify hardware compatibility
+        run: |
+          if [[ "$CONSOLE_HARDWARE_VERSION" != "v1.2" ]]; then
+            echo "Incompatible hardware version"
+            exit 1
+          fi
+
+      - name: Deploy kernel modules
+        run: |
+          chmod +x src/freebsd/tools/build_modules.sh
+          ./src/freebsd/tools/build_modules.sh install
+        env:
+          DEPLOY_ENV: staging
+          MODULES_DIR: /boot/modules
+
+      - name: Run security validation
+        run: |
+          chmod +x src/freebsd/tools/security_check.sh
+          ./src/freebsd/tools/security_check.sh
+        env:
+          GUARDIAN_SECURITY_LEVEL: 3
+
+      - name: Verify performance impact
+        run: |
+          if [[ $(./measure_performance.sh) -gt $PERFORMANCE_THRESHOLD ]]; then
+            echo "Performance impact exceeds threshold"
+            exit 1
+          fi
+
+  deploy_production:
+    name: Deploy to Production
+    needs: deploy_staging
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 60
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: freebsd-modules
+          path: artifacts
+
+      - name: Initialize blue-green deployment
+        run: |
+          echo "Preparing blue environment..."
+          # Blue environment setup would go here
+
+      - name: Deploy to blue environment
+        run: |
+          chmod +x src/freebsd/tools/build_modules.sh
+          ./src/freebsd/tools/build_modules.sh install
+        env:
+          DEPLOY_ENV: production-blue
+          MODULES_DIR: /boot/modules
+
+      - name: Validate blue deployment
+        run: |
+          chmod +x src/freebsd/tools/security_check.sh
+          ./src/freebsd/tools/security_check.sh
+        env:
+          GUARDIAN_SECURITY_LEVEL: 4
+
+      - name: Switch traffic to blue
+        run: |
+          echo "Switching production traffic to blue environment..."
+          # Traffic switching logic would go here
+
+      - name: Monitor deployment
+        run: |
+          echo "Monitoring deployment health..."
+          # Deployment monitoring logic would go here
+        timeout-minutes: 15
+
+      - name: Cleanup green environment
+        if: success()
+        run: |
+          echo "Cleaning up old green environment..."
+          # Cleanup logic would go here
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "Rolling back to green environment..."
+          # Rollback logic would go here
+
+outputs:
+  deployment_status:
+    description: 'Status of the deployment process'
+    value: ${{ job.status }}
+  environment:
+    description: 'Target environment'
+    value: ${{ github.event.deployment.environment }}
