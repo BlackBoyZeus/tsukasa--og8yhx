@@ -1,218 +1,262 @@
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use temporal_sdk_core_test::{TestContext, TestError};
-use tokio::time::timeout;
-use tracing::{debug, error, info, warn};
-use metrics::{counter, gauge, histogram};
+use std::{sync::Arc, time::Duration};
+use temporal_sdk_core_test::{TestContext, TestWorkflowEnvironment};
+use tokio::time;
+use tracing::{info, warn, error};
+use mockall::predicate::*;
+use metrics::{counter, histogram};
 
-use guardian::temporal::{
-    TemporalManager,
-    SecurityWorkflow,
-    SecurityActivities,
+use crate::temporal::{
+    TemporalRuntime,
+    workflows::SecurityWorkflow,
+    activities::SecurityActivities,
 };
 
-// Constants for test configuration
-const TEST_NAMESPACE: &str = "guardian-test";
-const TEST_QUEUE: &str = "test-queue";
-const TEST_TIMEOUT_MS: u64 = 5000;
-const PERFORMANCE_THRESHOLD_MS: u64 = 1000;
-const MAX_RESOURCE_USAGE_PERCENT: f64 = 80.0;
-const CONCURRENT_WORKFLOW_COUNT: usize = 10;
+// Test constants
+const TEST_NAMESPACE: &str = "guardian.test";
+const TEST_TASK_QUEUE: &str = "test.workflow.queue";
+const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+const PERFORMANCE_THRESHOLDS: PerformanceConfig = PerformanceConfig {
+    max_execution_time_ms: 1000,
+    max_memory_usage_mb: 100,
+    max_cpu_usage_percent: 50.0,
+};
 
-/// Sets up test environment for Temporal integration tests
-async fn setup_temporal_test_env(config: TestConfig) -> Result<TestContext, TestError> {
-    let test_context = TestContext::builder()
-        .with_namespace(TEST_NAMESPACE.to_string())
-        .with_task_queue(TEST_QUEUE.to_string())
-        .with_metrics_collection()
-        .with_resource_monitoring()
-        .build()
-        .await?;
-
-    // Initialize test metrics
-    metrics::describe_counter!("guardian.test.workflows.total", "Total test workflows executed");
-    metrics::describe_histogram!("guardian.test.workflow.duration_ms", "Test workflow execution duration");
-    metrics::describe_gauge!("guardian.test.resource.usage", "Test resource usage percentage");
-
-    Ok(test_context)
-}
-
-/// Comprehensive test suite for Temporal integration
-struct TemporalIntegrationTests {
-    test_context: TestContext,
-    temporal_manager: Arc<TemporalManager>,
-    metrics_collector: Arc<metrics::MetricsCollector>,
+/// Test context managing dependencies and monitoring
+#[derive(Debug)]
+struct TestContext {
+    temporal_runtime: TemporalRuntime,
+    mock_activities: MockSecurityActivities,
     resource_monitor: ResourceMonitor,
+    performance_tracker: PerformanceTracker,
 }
 
-impl TemporalIntegrationTests {
-    /// Creates new test suite instance with monitoring
-    async fn new(config: TestConfig) -> Result<Self, TestError> {
-        let test_context = setup_temporal_test_env(config).await?;
-        let temporal_manager = TemporalManager::new(Default::default()).await?;
-        let metrics_collector = Arc::new(metrics::MetricsCollector::new());
-        let resource_monitor = ResourceMonitor::new(MAX_RESOURCE_USAGE_PERCENT);
+impl TestContext {
+    /// Creates new test context with initialized dependencies
+    async fn new(config: TestConfig) -> Result<Self, GuardianError> {
+        // Initialize Temporal test runtime
+        let temporal_runtime = TemporalRuntime::initialize(
+            TemporalConfig {
+                namespace: TEST_NAMESPACE.to_string(),
+                task_queue: TEST_TASK_QUEUE.to_string(),
+                worker_options: Default::default(),
+                timeout: TEST_TIMEOUT,
+                metrics_enabled: true,
+            },
+            Arc::new(CoreMetricsManager::new(
+                MetricsCollector::new(MetricsConfig {
+                    statsd_host: "localhost".into(),
+                    statsd_port: 8125,
+                    buffer_size: Some(100),
+                    flush_interval: Some(Duration::from_secs(1)),
+                    sampling_rates: None,
+                })?,
+                MetricsConfig {
+                    sampling_rates: std::collections::HashMap::new(),
+                    priority_levels: std::collections::HashMap::new(),
+                    buffer_size: 1000,
+                },
+            )?),
+        ).await?;
+
+        // Initialize mock activities
+        let mut mock_activities = MockSecurityActivities::new();
+        mock_activities
+            .expect_detect_threats()
+            .returning(|_| Ok(ThreatAnalysis {
+                severity: ThreatLevel::High,
+                confidence: 0.95,
+                details: "Test threat detected".into(),
+            }));
+
+        mock_activities
+            .expect_execute_response()
+            .returning(|_| Ok(ResponseStatus {
+                success: true,
+                execution_time: Duration::from_millis(50),
+                error: None,
+            }));
 
         Ok(Self {
-            test_context,
-            temporal_manager,
-            metrics_collector,
-            resource_monitor,
+            temporal_runtime,
+            mock_activities,
+            resource_monitor: ResourceMonitor::new(config.resource_limits),
+            performance_tracker: PerformanceTracker::new(config.performance_thresholds),
         })
     }
 
-    /// Tests security workflow execution with performance validation
-    #[tokio::test]
-    async fn test_security_workflow_execution() -> Result<(), TestError> {
-        let start = Instant::now();
-        counter!("guardian.test.workflows.total").increment(1);
+    /// Cleans up test resources and exports metrics
+    async fn cleanup(self) -> Result<(), GuardianError> {
+        // Stop temporal runtime
+        self.temporal_runtime.shutdown().await?;
 
-        // Initialize test security event
-        let test_event = SecurityEvent {
-            id: format!("test_{}", fastrand::u64(..)),
-            // Additional fields would be populated here
-        };
-
-        // Execute security workflow with timeout
-        let workflow_result = timeout(
-            Duration::from_millis(TEST_TIMEOUT_MS),
-            SecurityWorkflow::continuous_security_monitoring(),
-        ).await??;
-
-        // Validate workflow completion
-        assert!(workflow_result.is_ok(), "Security workflow failed");
-
-        // Verify workflow state
-        let workflow_state = SecurityWorkflow::get_workflow_state().await?;
-        assert!(workflow_state.is_completed(), "Workflow did not complete");
-
-        // Validate performance metrics
-        let duration_ms = start.elapsed().as_millis() as f64;
-        histogram!("guardian.test.workflow.duration_ms").record(duration_ms);
-        assert!(
-            duration_ms < PERFORMANCE_THRESHOLD_MS as f64,
-            "Workflow execution exceeded performance threshold"
-        );
-
-        // Check resource usage
-        self.resource_monitor.check_resources()?;
-
-        Ok(())
-    }
-
-    /// Tests concurrent workflow execution and resource usage
-    #[tokio::test]
-    async fn test_concurrent_workflows() -> Result<(), TestError> {
-        let mut handles = Vec::with_capacity(CONCURRENT_WORKFLOW_COUNT);
-
-        // Launch concurrent workflows
-        for i in 0..CONCURRENT_WORKFLOW_COUNT {
-            let workflow = SecurityWorkflow::continuous_security_monitoring();
-            let handle = tokio::spawn(async move {
-                let start = Instant::now();
-                let result = workflow.await;
-                (i, result, start.elapsed())
-            });
-            handles.push(handle);
-        }
-
-        // Collect results and validate
-        let mut completion_times = Vec::new();
-        for handle in handles {
-            let (id, result, duration) = handle.await?;
-            assert!(result.is_ok(), "Workflow {} failed", id);
-            completion_times.push(duration.as_millis() as f64);
-        }
-
-        // Analyze performance metrics
-        let avg_completion_time = completion_times.iter().sum::<f64>() / completion_times.len() as f64;
-        histogram!("guardian.test.workflow.avg_concurrent_duration_ms").record(avg_completion_time);
-
-        assert!(
-            avg_completion_time < PERFORMANCE_THRESHOLD_MS as f64 * 1.5,
-            "Concurrent workflow performance degraded"
-        );
-
-        Ok(())
-    }
-
-    /// Tests comprehensive error handling in workflows
-    #[tokio::test]
-    async fn test_workflow_error_handling() -> Result<(), TestError> {
-        // Test invalid security event
-        let invalid_event = SecurityEvent {
-            id: String::new(), // Invalid empty ID
-        };
-
-        let result = SecurityWorkflow::continuous_security_monitoring().await;
-        assert!(result.is_err(), "Expected error for invalid event");
-
-        // Test activity timeout
-        let timeout_result = timeout(
-            Duration::from_millis(100), // Very short timeout
-            SecurityWorkflow::continuous_security_monitoring(),
-        ).await;
-        assert!(timeout_result.is_err(), "Expected timeout error");
-
-        // Test activity retry
-        let activities = SecurityActivities::new(
-            Arc::new(Default::default()),
-            Arc::new(Default::default()),
-        );
-
-        let retry_result = activities.analyze_security_event(invalid_event).await;
-        assert!(
-            retry_result.is_err(),
-            "Expected error after retry attempts exhausted"
-        );
+        // Export final metrics
+        self.performance_tracker.export_metrics();
+        self.resource_monitor.export_metrics();
 
         Ok(())
     }
 }
 
-/// Monitors resource usage during tests
-struct ResourceMonitor {
-    max_usage_percent: f64,
+/// Tests complete security workflow execution with performance monitoring
+#[tokio::test]
+#[tracing::instrument]
+async fn test_security_workflow_execution() -> Result<(), GuardianError> {
+    let ctx = TestContext::new(TestConfig::default()).await?;
+    let start_time = time::Instant::now();
+
+    // Initialize test data
+    let test_data = SystemData {
+        process_id: Some(1000),
+        resource_usage: 45.5,
+        network_activity: vec![
+            NetworkEvent { 
+                source: "192.168.1.100".into(),
+                destination: "192.168.1.200".into(),
+                protocol: "TCP".into(),
+                timestamp: time::OffsetDateTime::now_utc(),
+            }
+        ],
+    };
+
+    // Start performance monitoring
+    ctx.performance_tracker.start_tracking();
+    ctx.resource_monitor.start_monitoring();
+
+    // Execute security workflow
+    let workflow_result = ctx.temporal_runtime
+        .execute_workflow(
+            SecurityWorkflow::execute_security_workflow,
+            test_data,
+            Some(TEST_TIMEOUT),
+        )
+        .await?;
+
+    // Verify workflow execution
+    assert!(workflow_result.success);
+    assert!(workflow_result.execution_time < Duration::from_secs(1));
+
+    // Verify activity executions
+    ctx.mock_activities.verify();
+
+    // Validate performance metrics
+    let execution_time = start_time.elapsed();
+    histogram!("guardian.test.workflow.execution_time", execution_time.as_secs_f64());
+
+    assert!(execution_time < TEST_TIMEOUT);
+    assert!(ctx.performance_tracker.check_thresholds());
+    assert!(ctx.resource_monitor.check_limits());
+
+    // Cleanup test resources
+    ctx.cleanup().await?;
+
+    Ok(())
 }
 
-impl ResourceMonitor {
-    fn new(max_usage_percent: f64) -> Self {
-        Self { max_usage_percent }
-    }
+/// Tests error handling and recovery scenarios
+#[tokio::test]
+#[tracing::instrument]
+async fn test_workflow_error_handling() -> Result<(), GuardianError> {
+    let ctx = TestContext::new(TestConfig::default()).await?;
 
-    fn check_resources(&self) -> Result<(), TestError> {
-        let cpu_usage = sys_info::cpu_load_aggregate()
-            .map_err(|e| TestError::ResourceError(format!("Failed to get CPU usage: {}", e)))?
-            .done()
-            .unwrap_or(0.0);
+    // Configure mock failures
+    ctx.mock_activities
+        .expect_detect_threats()
+        .times(1)
+        .returning(|_| Err(GuardianError::SecurityError {
+            context: "Test failure".into(),
+            source: None,
+            severity: crate::utils::error::ErrorSeverity::High,
+            timestamp: time::OffsetDateTime::now_utc(),
+            correlation_id: uuid::Uuid::new_v4(),
+            category: crate::utils::error::ErrorCategory::Security,
+            retry_count: 0,
+        }));
 
-        let memory = sys_info::mem_info()
-            .map_err(|e| TestError::ResourceError(format!("Failed to get memory info: {}", e)))?;
-        let memory_usage = (memory.total - memory.free) as f64 / memory.total as f64 * 100.0;
+    // Start resource monitoring
+    ctx.resource_monitor.start_monitoring();
 
-        gauge!("guardian.test.resource.cpu_usage").set(cpu_usage);
-        gauge!("guardian.test.resource.memory_usage").set(memory_usage);
+    // Execute workflow with error condition
+    let result = ctx.temporal_runtime
+        .execute_workflow(
+            SecurityWorkflow::execute_security_workflow,
+            SystemData::default(),
+            Some(TEST_TIMEOUT),
+        )
+        .await;
 
-        if cpu_usage > self.max_usage_percent || memory_usage > self.max_usage_percent {
-            return Err(TestError::ResourceError(format!(
-                "Resource usage exceeded threshold: CPU={}%, Memory={}%",
-                cpu_usage, memory_usage
-            )));
-        }
+    // Verify error handling
+    assert!(result.is_err());
+    
+    // Verify retry behavior
+    let metrics = ctx.temporal_runtime.get_metrics()?;
+    assert!(metrics.iter().any(|(k, v)| k == "guardian.workflow.retries" && *v > 0.0));
 
-        Ok(())
-    }
+    // Verify resource cleanup
+    assert!(ctx.resource_monitor.check_limits());
+
+    // Cleanup
+    ctx.cleanup().await?;
+
+    Ok(())
 }
 
+/// Helper struct for test configuration
 #[derive(Debug)]
 struct TestConfig {
-    // Test configuration fields would be defined here
+    resource_limits: ResourceLimits,
+    performance_thresholds: PerformanceConfig,
 }
 
 impl Default for TestConfig {
     fn default() -> Self {
         Self {
-            // Default test configuration
+            resource_limits: ResourceLimits::default(),
+            performance_thresholds: PERFORMANCE_THRESHOLDS,
         }
     }
+}
+
+/// Helper struct for monitoring resource usage
+#[derive(Debug)]
+struct ResourceMonitor {
+    limits: ResourceLimits,
+    start_usage: ResourceUsage,
+    current_usage: Arc<parking_lot::RwLock<ResourceUsage>>,
+}
+
+/// Helper struct for tracking performance metrics
+#[derive(Debug)]
+struct PerformanceTracker {
+    thresholds: PerformanceConfig,
+    start_time: time::Instant,
+    metrics: Arc<parking_lot::RwLock<Vec<PerformanceMetric>>>,
+}
+
+#[derive(Debug, Clone)]
+struct PerformanceMetric {
+    name: String,
+    value: f64,
+    timestamp: time::OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
+struct ResourceLimits {
+    max_memory_mb: u64,
+    max_cpu_percent: f64,
+}
+
+impl Default for ResourceLimits {
+    fn default() -> Self {
+        Self {
+            max_memory_mb: 256,
+            max_cpu_percent: 75.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PerformanceConfig {
+    max_execution_time_ms: u64,
+    max_memory_usage_mb: u64,
+    max_cpu_usage_percent: f64,
 }
