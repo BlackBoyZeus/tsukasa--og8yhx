@@ -1,0 +1,147 @@
+# AlertManager Configuration v0.25.0
+# Enhanced configuration for AI Guardian monitoring system with security optimizations
+
+global:
+  # Global timeout for resolved alerts
+  resolve_timeout: 5m
+  
+  # SMTP configuration
+  smtp_from: guardian-alerts@guardian.local
+  smtp_smarthost: ${SMTP_SMARTHOST}
+  smtp_require_tls: true
+  
+  # External service URLs
+  slack_api_url: ${SLACK_API_URL}
+  pagerduty_url: ${PAGERDUTY_URL}
+  
+  # Enhanced TLS configuration
+  http_config:
+    tls_config:
+      min_version: TLS13
+
+# Main routing tree with optimized paths for security incidents
+route:
+  # Default grouping parameters
+  group_by: ['alertname', 'cluster', 'service', 'severity']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: default-receiver
+
+  # Specialized routing paths
+  routes:
+    # Critical security incidents - immediate notification
+    - match:
+        severity: critical
+        type: security
+      receiver: security-team-urgent
+      group_wait: 0s
+      repeat_interval: 15m
+      continue: true
+
+    # Critical system incidents
+    - match:
+        severity: critical
+      receiver: security-team
+      group_wait: 0s
+      repeat_interval: 1h
+
+    # High severity incidents
+    - match:
+        severity: high
+      receiver: ops-team
+      group_wait: 1m
+      repeat_interval: 2h
+
+    # ML and security service specific incidents
+    - match_re:
+        service: ".*ml.*|.*security.*"
+      receiver: ml-security-team
+      group_wait: 30s
+      repeat_interval: 3h
+
+# Intelligent alert suppression rules
+inhibit_rules:
+  # Suppress warnings when critical alert exists
+  - source_match:
+      severity: critical
+    target_match:
+      severity: warning
+    equal: ['alertname', 'cluster', 'service']
+
+  # Suppress info when high severity alert exists
+  - source_match:
+      severity: high
+    target_match:
+      severity: info
+    equal: ['alertname', 'cluster', 'service']
+
+  # Suppress service degraded when service down
+  - source_match_re:
+      alertname: ".*ServiceDown.*"
+    target_match_re:
+      alertname: ".*ServiceDegraded.*"
+    equal: ['service', 'cluster']
+
+# Notification receivers with redundant paths
+receivers:
+  # Urgent security team notifications
+  - name: security-team-urgent
+    pagerduty_configs:
+      - service_key: SECURITY_URGENT_KEY
+        send_resolved: true
+        severity: critical
+    slack_configs:
+      - channel: '#guardian-security-urgent'
+        send_resolved: true
+        title: '🚨 CRITICAL SECURITY ALERT'
+        text: '{{ .CommonAnnotations.description }}'
+
+  # Security team notifications
+  - name: security-team
+    email_configs:
+      - to: security@guardian.local
+        send_resolved: true
+        headers:
+          subject: '[CRITICAL] Guardian Security Alert'
+    slack_configs:
+      - channel: '#guardian-security'
+        send_resolved: true
+
+  # Operations team notifications
+  - name: ops-team
+    email_configs:
+      - to: ops@guardian.local
+        send_resolved: true
+    slack_configs:
+      - channel: '#guardian-ops'
+        send_resolved: true
+
+  # ML and security team notifications
+  - name: ml-security-team
+    email_configs:
+      - to: ml-security@guardian.local
+        send_resolved: true
+    slack_configs:
+      - channel: '#guardian-ml-security'
+        send_resolved: true
+
+# Enhanced security settings
+security:
+  # TLS configuration
+  tls_config:
+    cert_file: /etc/alertmanager/certs/alertmanager.crt
+    key_file: /etc/alertmanager/certs/alertmanager.key
+    ca_file: /etc/alertmanager/certs/ca.crt
+    min_version: TLS13
+    cipher_suites:
+      - TLS_AES_128_GCM_SHA256
+      - TLS_AES_256_GCM_SHA384
+    prefer_server_cipher_suites: true
+
+  # Rate limiting and authentication
+  basic_auth: false
+  rate_limit:
+    enabled: true
+    limit: 1000
+    window: 5m
