@@ -1,0 +1,142 @@
+[package]
+name = "guardian"
+version = "0.1.0"
+edition = "2021"
+authors = ["Guardian Development Team"]
+description = "AI-driven autonomous security and management system for gaming console platform"
+license = "Proprietary"
+repository = "https://github.com/guardian/guardian"
+rust-version = "1.75"
+categories = ["security", "machine-learning", "gaming"]
+keywords = ["security", "ai", "gaming", "autonomous", "management"]
+
+[lib]
+name = "guardian"
+path = "src/lib.rs"
+
+[[bin]]
+name = "guardian-cli"
+path = "src/bin/cli.rs"
+
+[dependencies]
+# Async Runtime - v1.32.0
+tokio = { version = "1.32", features = ["full", "rt-multi-thread", "macros"] }
+
+# Tracing and Telemetry - v0.1.40
+tracing = { version = "0.1", features = ["async-await", "attributes"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Workflow Orchestration - v1.20.0
+temporal-sdk-rs = { version = "1.20", features = ["tls", "async-trait"] }
+
+# Machine Learning - v0.8.0
+burn = { version = "0.8", features = ["cuda", "ndarray"] }
+candle = { version = "0.3", features = ["cuda", "accelerate"] }
+
+# CLI Interface - v4.0.0
+clap = { version = "4.0", features = ["derive", "env"] }
+
+# Serialization - v1.0.0
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# gRPC Communication - v0.10.0
+tonic = { version = "0.10", features = ["tls", "transport"] }
+prost = "0.12"
+
+# Messaging - v4.3.0
+zeromq = { version = "4.3", features = ["tokio", "security"] }
+nats = { version = "2.10", features = ["tls", "auth"] }
+
+# Security
+ring = "0.17"
+rustls = "0.21"
+zeroize = "1.6"
+
+# Storage
+zfs = "0.8"
+tempfile = "3.8"
+
+# Error Handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+[dev-dependencies]
+tokio-test = "0.4"
+mockall = "0.11"
+criterion = "0.5"
+proptest = "1.2"
+
+[build-dependencies]
+tonic-build = "0.10"
+
+[features]
+default = ["full"]
+
+full = [
+    "security",
+    "ml",
+    "temporal",
+    "monitoring"
+]
+
+security = [
+    "crypto",
+    "audit",
+    "threat-detection",
+    "secure-storage",
+    "access-control"
+]
+
+ml = [
+    "inference",
+    "training",
+    "feature-extraction",
+    "gpu-acceleration",
+    "model-validation"
+]
+
+temporal = [
+    "workflows",
+    "activities",
+    "history",
+    "replay",
+    "persistence"
+]
+
+monitoring = [
+    "metrics",
+    "tracing",
+    "logging",
+    "alerting",
+    "diagnostics"
+]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = false
+strip = true
+debug-assertions = false
+overflow-checks = true
+rpath = false
+incremental = false
+
+[profile.bench]
+opt-level = 3
+debug = true
+debug-assertions = false
+overflow-checks = false
+lto = "thin"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.cargo-udeps]
+ignore = ["tempfile"]
+
+[package.metadata.cargo-audit]
+ignore = []
