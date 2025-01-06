@@ -1,0 +1,123 @@
+target/
+*.ko
+*.o
+*.so
+*.a
+*.d
+src/backend/target/
+src/freebsd/obj/
+
+# Security Sensitive Files
+*.env
+src/backend/.env
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+*.tfstate
+*.tfvars
+.terraform/
+src/security/certs/
+
+# Development Tools
+.idea/
+.vscode/
+*.swp
+*.swo
+coverage/
+node_modules/
+.cargo/
+.rustup/
+.rust-analyzer/
+
+# System Files
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.temp
+*.bak
+
+# ML and Data Files
+model_cache/
+src/ml/model_cache/
+*.ckpt
+*.pt
+*.pth
+*.h5
+*.pb
+*.onnx
+
+# FreeBSD Specific
+*.core
+*.symbols
+*.debug
+*.full
+
+# Temporal.io
+.temporal/
+temporal-data/
+
+# ZFS Snapshots
+.zfs/
+
+# Rust Specific
+**/*.rs.bk
+Cargo.lock
+
+# Test Files
+*.test
+*.spec
+*.bench
+
+# Documentation
+docs/_build/
+docs/api/
+
+# Dependency Lock Files
+yarn.lock
+package-lock.json
+
+# Cache Directories
+.cache/
+__pycache__/
+*.pyc
+
+# Local Configuration
+config.local.*
+settings.local.*
+
+# Database Files
+*.db
+*.sqlite
+*.sqlite3
+
+# Backup Files
+*.backup
+*.bak
+*~
+
+# Compiled Binaries
+*.exe
+*.dll
+*.dylib
+
+# Temporary Directories
+tmp/
+temp/
+.tmp/
+
+# IDE Specific
+*.iml
+.project
+.classpath
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# OS Generated
+.directory
+.Trash-*
+$RECYCLE.BIN/
+System Volume Information/
