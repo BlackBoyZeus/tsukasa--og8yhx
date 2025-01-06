@@ -1,0 +1,221 @@
+version: "3.8"
+
+# Global environment variables
+x-environment: &common-env
+  RUST_LOG: "info,guardian=debug"
+  RUST_BACKTRACE: "1"
+  GUARDIAN_CONFIG_PATH: "/etc/guardian/config"
+
+# Common security settings
+x-security: &security-opts
+  security_opt:
+    - no-new-privileges:true
+    - seccomp=unconfined
+  cap_drop:
+    - ALL
+  cap_add:
+    - NET_BIND_SERVICE
+  read_only: true
+
+services:
+  # Core Guardian backend service
+  backend:
+    build:
+      context: .
+      dockerfile: ../infrastructure/docker/backend.Dockerfile
+      args:
+        RUST_VERSION: "1.75.0"
+    image: guardian/backend:${VERSION:-latest}
+    container_name: guardian-backend
+    <<: *security-opts
+    environment:
+      <<: *common-env
+      TEMPORAL_SERVER: "temporal:7233"
+      REDIS_URL: "redis:6379"
+    ports:
+      - "8000:8000"  # HTTP API
+      - "50051:50051" # gRPC
+    volumes:
+      - guardian_data:/var/lib/guardian
+      - guardian_config:/etc/guardian/config:ro
+      - guardian_certs:/etc/guardian/certs:ro
+      - guardian_logs:/var/log/guardian
+    tmpfs:
+      - /tmp:rw,noexec,nosuid
+    depends_on:
+      temporal:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/guardian-ctl", "status", "--json"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "2G"
+        reservations:
+          cpus: "0.5"
+          memory: "512M"
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+    networks:
+      - guardian_net
+
+  # Temporal workflow engine
+  temporal:
+    image: temporalio/server:1.20.0
+    container_name: guardian-temporal
+    <<: *security-opts
+    environment:
+      - TEMPORAL_PERSISTENCE_DRIVER=redis
+      - TEMPORAL_REDIS_URL=redis:6379
+      - TEMPORAL_TLS_ENABLED=true
+      - TEMPORAL_TLS_CERT=/etc/temporal/certs/tls.crt
+      - TEMPORAL_TLS_KEY=/etc/temporal/certs/tls.key
+      - TEMPORAL_TLS_CA=/etc/temporal/certs/ca.crt
+      - TEMPORAL_METRICS_PROMETHEUS_ENABLED=true
+    ports:
+      - "7233:7233"  # gRPC API
+    volumes:
+      - temporal_data:/etc/temporal
+      - temporal_backup:/etc/temporal/backup
+      - guardian_certs:/etc/temporal/certs:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1G"
+        reservations:
+          cpus: "0.2"
+          memory: "256M"
+    networks:
+      - guardian_net
+
+  # Redis for caching and Temporal persistence
+  redis:
+    image: redis:7.0.12-alpine
+    container_name: guardian-redis
+    <<: *security-opts
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "512M"
+        reservations:
+          cpus: "0.1"
+          memory: "128M"
+    networks:
+      - guardian_net
+
+  # Prometheus metrics collection
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: guardian-prometheus
+    <<: *security-opts
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "512M"
+        reservations:
+          cpus: "0.1"
+          memory: "128M"
+    networks:
+      - guardian_net
+
+volumes:
+  guardian_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/guardian
+  guardian_config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /etc/guardian/config
+  guardian_certs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /etc/guardian/certs
+  guardian_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/log/guardian
+  temporal_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/guardian/temporal
+  temporal_backup:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/guardian/temporal_backup
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+
+networks:
+  guardian_net:
+    driver: bridge
+    driver_opts:
+      encrypted: "true"
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
