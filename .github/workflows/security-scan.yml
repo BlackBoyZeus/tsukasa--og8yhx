@@ -1,0 +1,183 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'src/**'
+      - 'Cargo.*'
+      - '.github/workflows/**'
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    - cron: '0 0 * * *'  # Daily security scan
+  workflow_dispatch:  # Manual trigger
+  workflow_call:      # Callable from other workflows
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUST_LOG: debug
+  SECURITY_SCAN_LEVEL: high
+  CARGO_AUDIT_LEVEL: critical
+  SCAN_REPORT_PATH: ./security-reports
+  CARGO_DENY_VERSION: 0.13.7
+  CLIPPY_OPTS: -D warnings -W clippy::all -W clippy::pedantic -W clippy::nursery
+
+jobs:
+  setup:
+    name: Setup Security Environment
+    runs-on: ubuntu-latest
+    outputs:
+      cache-key: ${{ steps.cache-key.outputs.value }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate cache key
+        id: cache-key
+        run: |
+          echo "value=${{ hashFiles('**/Cargo.lock', '**/rust-toolchain.toml') }}" >> $GITHUB_OUTPUT
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@1.75.0
+        with:
+          components: clippy, rustfmt, miri
+          targets: x86_64-unknown-freebsd, aarch64-unknown-freebsd
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-security-${{ steps.cache-key.outputs.value }}
+
+  dependency-audit:
+    name: Dependency Security Audit
+    needs: setup
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Restore cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ needs.setup.outputs.cache-key }}
+
+      - name: Run cargo-audit
+        uses: actions-rs/audit-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run cargo-deny check
+        uses: EmbarkStudios/cargo-deny-action@v1
+        with:
+          command: check
+          arguments: --all-features
+          log-level: warn
+
+      - name: Generate dependency report
+        run: |
+          mkdir -p ${{ env.SCAN_REPORT_PATH }}
+          cargo tree --all-features > ${{ env.SCAN_REPORT_PATH }}/dependency-tree.txt
+          cargo audit --json > ${{ env.SCAN_REPORT_PATH }}/audit-report.json
+
+  code-security:
+    name: Code Security Analysis
+    needs: setup
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.75.0
+        with:
+          components: clippy, miri
+          targets: x86_64-unknown-freebsd
+
+      - name: Restore cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ needs.setup.outputs.cache-key }}
+
+      - name: Run Clippy security lints
+        run: |
+          cargo clippy --all-targets --all-features -- ${{ env.CLIPPY_OPTS }}
+
+      - name: Run Miri tests
+        run: |
+          cargo miri test --all-features
+        continue-on-error: true
+
+      - name: Static analysis
+        run: |
+          cargo check --all-targets --all-features
+          cargo fmt -- --check
+
+      - name: Generate security report
+        run: |
+          mkdir -p ${{ env.SCAN_REPORT_PATH }}
+          cargo clippy --all-targets --all-features --message-format=json \
+            -- ${{ env.CLIPPY_OPTS }} > ${{ env.SCAN_REPORT_PATH }}/clippy-report.json
+
+  license-compliance:
+    name: License Compliance Check
+    needs: setup
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run cargo-deny license check
+        uses: EmbarkStudios/cargo-deny-action@v1
+        with:
+          command: check licenses
+          arguments: --all-features
+          log-level: warn
+
+      - name: Generate license report
+        run: |
+          mkdir -p ${{ env.SCAN_REPORT_PATH }}
+          cargo license --json > ${{ env.SCAN_REPORT_PATH }}/license-report.json
+
+  security-report:
+    name: Generate Security Report
+    needs: [dependency-audit, code-security, license-compliance]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Collect security reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-reports
+          path: ${{ env.SCAN_REPORT_PATH }}
+          retention-days: 30
+
+      - name: Check for failures
+        if: contains(needs.*.result, 'failure')
+        run: |
+          echo "Security scan detected issues. Check the security reports for details."
+          exit 1
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+  checks: write
