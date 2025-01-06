@@ -1,0 +1,145 @@
+syntax = "proto3";
+
+package guardian.ml.v1;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+import "security.proto";
+
+option go_package = "./ml";
+option java_package = "com.guardian.ml.grpc";
+
+// MLService provides comprehensive machine learning operations for the Guardian system
+service MLService {
+  // InferenceRequest performs real-time inference using the specified model
+  rpc InferenceRequest(ModelInferenceRequest) returns (InferenceResult) {}
+  
+  // TrainModel initiates a new model training job
+  rpc TrainModel(TrainingRequest) returns (TrainingJob) {}
+  
+  // GetModelStatus retrieves current status of a model
+  rpc GetModelStatus(ModelStatusRequest) returns (Model) {}
+  
+  // UpdateModel deploys a new version of an existing model
+  rpc UpdateModel(ModelUpdateRequest) returns (Model) {}
+  
+  // MonitorTraining provides real-time training progress updates
+  rpc MonitorTraining(TrainingJobRequest) returns (stream TrainingJob) {}
+}
+
+// Model represents a machine learning model with metadata
+message Model {
+  string model_id = 1;
+  string version = 2;
+  ModelType model_type = 3;
+  ModelStatus status = 4;
+  float accuracy = 5;
+  google.protobuf.Timestamp last_updated = 6;
+  map<string, float> performance_metrics = 7;
+  bytes model_hash = 8;  // Cryptographic hash for integrity verification
+}
+
+// ModelType defines different types of ML models in the system
+enum ModelType {
+  THREAT_DETECTION = 0;
+  ANOMALY_DETECTION = 1;
+  RESPONSE_SELECTION = 2;
+  FEATURE_EXTRACTION = 3;
+}
+
+// ModelStatus tracks the current state of a model
+enum ModelStatus {
+  ACTIVE = 0;
+  TRAINING = 1;
+  VALIDATING = 2;
+  INACTIVE = 3;
+  FAILED = 4;
+}
+
+// TrainingStatus tracks the progress of model training
+enum TrainingStatus {
+  PENDING = 0;
+  IN_PROGRESS = 1;
+  COMPLETED = 2;
+  FAILED = 3;
+  CANCELLED = 4;
+}
+
+// TrainingJob provides comprehensive training status and metrics
+message TrainingJob {
+  string job_id = 1;
+  string model_id = 2;
+  TrainingStatus status = 3;
+  float progress = 4;  // Progress percentage (0.0-1.0)
+  TrainingMetrics metrics = 5;
+  google.protobuf.Timestamp start_time = 6;
+  google.protobuf.Timestamp estimated_completion = 7;
+  repeated string validation_errors = 8;
+}
+
+// TrainingMetrics tracks performance metrics during training
+message TrainingMetrics {
+  float loss = 1;
+  float accuracy = 2;
+  int32 epoch = 3;
+  int64 duration = 4;  // Training duration in milliseconds
+  float validation_accuracy = 5;
+  float validation_loss = 6;
+  map<string, float> custom_metrics = 7;
+}
+
+// ModelInferenceRequest contains input data for model inference
+message ModelInferenceRequest {
+  string model_id = 1;
+  bytes input_data = 2;
+  map<string, string> parameters = 3;
+  bool return_features = 4;  // Option to return intermediate features
+}
+
+// InferenceResult contains model prediction results
+message InferenceResult {
+  string result_id = 1;
+  string model_id = 2;
+  bytes prediction = 3;
+  float confidence = 4;
+  google.protobuf.Timestamp timestamp = 5;
+  map<string, bytes> features = 6;  // Optional intermediate features
+  int64 inference_time = 7;  // Inference duration in microseconds
+}
+
+// TrainingRequest initiates a new model training job
+message TrainingRequest {
+  string model_id = 1;
+  ModelType model_type = 2;
+  map<string, string> hyperparameters = 3;
+  string dataset_path = 4;
+  ValidationConfig validation_config = 5;
+}
+
+// ValidationConfig specifies model validation parameters
+message ValidationConfig {
+  float validation_split = 1;
+  float minimum_accuracy = 2;
+  int32 validation_iterations = 3;
+  repeated string validation_metrics = 4;
+}
+
+// ModelStatusRequest retrieves model status
+message ModelStatusRequest {
+  string model_id = 1;
+  bool include_metrics = 2;
+}
+
+// ModelUpdateRequest deploys a new model version
+message ModelUpdateRequest {
+  string model_id = 1;
+  bytes model_data = 2;
+  string version = 3;
+  ValidationConfig validation_config = 4;
+}
+
+// TrainingJobRequest retrieves training job status
+message TrainingJobRequest {
+  string job_id = 1;
+  bool include_metrics = 2;
+}
