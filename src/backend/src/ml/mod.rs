@@ -1,246 +1,241 @@
-//! ML Engine module for the Guardian system
-//! Version: 2.1.0
+//! ML subsystem for AI Guardian providing threat detection, feature extraction,
+//! model management, and inference capabilities with strict resource controls.
 //! 
-//! Provides centralized access to machine learning capabilities including:
-//! - Model management and versioning
-//! - High-performance inference engine
-//! - Feature extraction and preprocessing
-//! - Training pipeline with validation
-//! - Resource optimization and monitoring
+//! Version: 1.0.0
+//! Dependencies:
+//! - burn = "0.8"
+//! - candle = "0.3"
+//! - tokio = "1.32"
+//! - tracing = "0.1"
 
 use burn::backend::Backend;
-use burn::config::Config as BurnConfig;
-use candle_core::{Device, Tensor};
-use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, error, info, instrument, warn};
+use burn::tensor::backend::Backend as TensorBackend;
+use candle::{Device, Tensor};
+use tokio::sync::{RwLock, Semaphore};
+use tracing::{error, info, instrument, warn};
 
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use crate::utils::error::{GuardianError, Result};
-use crate::config::ml_config::{MLConfig, InferenceConfig};
-
-// Version constant for ML engine
-pub const ML_VERSION: &str = "2.1.0";
-
-// Default compute device
-pub const DEFAULT_DEVICE: &str = "cuda";
+use crate::utils::error::{GuardianError, ErrorCategory, ErrorSeverity};
 
 // Submodules
 pub mod model_registry;
-pub mod inference_engine;
 pub mod feature_extractor;
-pub mod model_manager;
-pub mod training_pipeline;
+pub mod inference_engine;
 
-// Re-exports
-pub use model_registry::ModelRegistry;
-pub use inference_engine::InferenceEngine;
-pub use feature_extractor::FeatureExtractor;
-pub use model_manager::ModelManager;
-pub use training_pipeline::TrainingPipeline;
+// Re-exports for convenient access
+pub use model_registry::{ModelRegistry, ModelMetrics, ModelVersion};
+pub use feature_extractor::{FeatureExtractor, Features, FeatureMetrics};
+pub use inference_engine::{InferenceEngine, Prediction, InferenceMetrics};
 
-/// Core ML Engine structure coordinating all ML operations
-pub struct MLEngine {
-    config: MLConfig,
-    model_registry: Arc<ModelRegistry>,
-    inference_engine: Arc<InferenceEngine>,
-    feature_extractor: Arc<FeatureExtractor>,
-    model_manager: Arc<ModelManager>,
-    training_pipeline: Arc<TrainingPipeline>,
+// Constants for ML subsystem configuration and constraints
+pub const ML_VERSION: &str = "1.0.0";
+pub const DEFAULT_MODEL_PATH: &str = "models/guardian";
+pub const MAX_INFERENCE_THREADS: usize = 4;
+pub const MIN_CONFIDENCE_THRESHOLD: f32 = 0.99999;
+pub const MAX_RESOURCE_USAGE_PERCENT: f32 = 5.0;
+
+/// Configuration for the ML subsystem
+#[derive(Debug, Clone)]
+pub struct MLConfig {
+    /// Path to model directory
+    pub model_path: String,
+    /// Maximum threads for inference
+    pub max_threads: usize,
+    /// Minimum confidence threshold
+    pub confidence_threshold: f32,
+    /// Maximum resource usage percentage
+    pub max_resource_usage: f32,
+    /// Enable hardware acceleration
+    pub enable_gpu: bool,
+}
+
+impl Default for MLConfig {
+    fn default() -> Self {
+        Self {
+            model_path: DEFAULT_MODEL_PATH.to_string(),
+            max_threads: MAX_INFERENCE_THREADS,
+            confidence_threshold: MIN_CONFIDENCE_THRESHOLD,
+            max_resource_usage: MAX_RESOURCE_USAGE_PERCENT,
+            enable_gpu: false,
+        }
+    }
+}
+
+/// Core ML subsystem managing all ML-related operations
+pub struct MLSubsystem {
+    /// Model registry for version control and metrics
+    model_registry: RwLock<ModelRegistry>,
+    /// Feature extraction with performance tracking
+    feature_extractor: RwLock<FeatureExtractor>,
+    /// Thread-safe inference engine
+    inference_engine: RwLock<InferenceEngine>,
+    /// Resource control semaphore
+    thread_limiter: Semaphore,
+    /// Hardware device for computation
     device: Device,
-    resource_monitor: Arc<RwLock<ResourceMonitor>>,
-    shutdown_tx: mpsc::Sender<()>,
+    /// Configuration parameters
+    config: MLConfig,
 }
 
-/// Resource monitoring and optimization
-struct ResourceMonitor {
-    last_check: Instant,
-    cpu_usage: f32,
-    memory_usage: f32,
-    gpu_usage: Option<f32>,
-    performance_metrics: PerformanceMetrics,
-}
+impl MLSubsystem {
+    /// Creates a new ML subsystem instance with the given configuration
+    #[instrument(skip(config), err)]
+    pub async fn new(config: MLConfig) -> Result<Self, GuardianError> {
+        // Validate configuration
+        Self::validate_config(&config).map_err(|e| GuardianError::MLError {
+            context: "Invalid ML configuration".to_string(),
+            source: Some(Box::new(e)),
+            severity: ErrorSeverity::Critical,
+            timestamp: time::OffsetDateTime::now_utc(),
+            correlation_id: uuid::Uuid::new_v4(),
+            category: ErrorCategory::ML,
+            retry_count: 0,
+        })?;
 
-/// Performance tracking metrics
-#[derive(Debug, Default)]
-struct PerformanceMetrics {
-    inference_latency: Vec<Duration>,
-    batch_throughput: usize,
-    model_accuracy: f32,
-    resource_efficiency: f32,
-}
-
-impl MLEngine {
-    /// Initialize the ML engine with comprehensive configuration and validation
-    #[instrument(skip(config), fields(version = %ML_VERSION))]
-    pub async fn init(config: MLConfig) -> Result<Self> {
-        info!("Initializing ML Engine v{}", ML_VERSION);
-        
-        // Verify hardware capabilities and select optimal device
-        let device = Self::initialize_device(&config)?;
-        debug!("Selected compute device: {:?}", device);
-
-        // Initialize communication channels
-        let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
-
-        // Initialize core components with resource optimization
-        let model_registry = Arc::new(ModelRegistry::new(&config)?);
-        let inference_engine = Arc::new(InferenceEngine::new(&config, device.clone())?);
-        let feature_extractor = Arc::new(FeatureExtractor::new(&config)?);
-        let model_manager = Arc::new(ModelManager::new(&config, model_registry.clone())?);
-        let training_pipeline = Arc::new(TrainingPipeline::new(&config)?);
-        
-        // Initialize resource monitoring
-        let resource_monitor = Arc::new(RwLock::new(ResourceMonitor {
-            last_check: Instant::now(),
-            cpu_usage: 0.0,
-            memory_usage: 0.0,
-            gpu_usage: None,
-            performance_metrics: PerformanceMetrics::default(),
-        }));
-
-        // Start resource monitoring task
-        let monitor_clone = resource_monitor.clone();
-        tokio::spawn(async move {
-            while shutdown_rx.try_recv().is_err() {
-                if let Err(e) = Self::monitor_resources(&monitor_clone).await {
-                    error!("Resource monitoring error: {}", e);
-                }
-                tokio::time::sleep(Duration::from_millis(config.resource_config.check_interval_ms)).await;
-            }
-        });
-
-        let engine = Self {
-            config,
-            model_registry,
-            inference_engine,
-            feature_extractor,
-            model_manager,
-            training_pipeline,
-            device,
-            resource_monitor,
-            shutdown_tx,
+        // Initialize device
+        let device = if config.enable_gpu {
+            Device::cuda_if_available().unwrap_or(Device::Cpu)
+        } else {
+            Device::Cpu
         };
 
-        // Validate engine health
-        engine.validate_health().await?;
-        
-        info!("ML Engine initialization complete");
-        Ok(engine)
+        info!("Initializing ML subsystem with device: {:?}", device);
+
+        // Initialize components
+        let model_registry = RwLock::new(ModelRegistry::new(&config.model_path).await?);
+        let feature_extractor = RwLock::new(FeatureExtractor::new(&device)?);
+        let inference_engine = RwLock::new(InferenceEngine::new(
+            &device,
+            config.confidence_threshold,
+        )?);
+        let thread_limiter = Semaphore::new(config.max_threads);
+
+        Ok(Self {
+            model_registry,
+            feature_extractor,
+            inference_engine,
+            thread_limiter,
+            device,
+            config,
+        })
     }
 
-    /// Initialize optimal compute device based on configuration and availability
-    fn initialize_device(config: &MLConfig) -> Result<Device> {
-        if config.hardware_config.enable_cuda && Device::cuda_is_available(0) {
-            Ok(Device::Cuda(0))
-        } else if config.hardware_config.enable_metal && Device::metal_is_available() {
-            Ok(Device::Metal)
-        } else {
-            warn!("Hardware acceleration unavailable, falling back to CPU");
-            Ok(Device::Cpu)
+    /// Validates the ML configuration parameters
+    fn validate_config(config: &MLConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if config.max_threads == 0 || config.max_threads > 32 {
+            return Err("Invalid thread count".into());
         }
-    }
-
-    /// Monitor system resources and optimize performance
-    async fn monitor_resources(monitor: &Arc<RwLock<ResourceMonitor>>) -> Result<()> {
-        let mut lock = monitor.write().await;
-        
-        // Update resource usage metrics
-        lock.cpu_usage = sys_info::cpu_load_aggregate()
-            .map_err(|e| GuardianError::MLError(format!("CPU monitoring error: {}", e)))?
-            .0;
-            
-        lock.memory_usage = sys_info::mem_info()
-            .map_err(|e| GuardianError::MLError(format!("Memory monitoring error: {}", e)))?
-            .total as f32;
-
-        // Update GPU metrics if available
-        if let Ok(gpu_info) = gpu_info::get_gpu_info() {
-            lock.gpu_usage = Some(gpu_info.utilization);
+        if config.confidence_threshold < 0.0 || config.confidence_threshold > 1.0 {
+            return Err("Invalid confidence threshold".into());
         }
-
+        if config.max_resource_usage <= 0.0 || config.max_resource_usage > 100.0 {
+            return Err("Invalid resource usage limit".into());
+        }
         Ok(())
     }
 
-    /// Validate overall engine health and component status
-    async fn validate_health(&self) -> Result<()> {
-        // Verify model registry health
-        self.model_registry.health_check().await?;
+    /// Performs threat detection with resource controls and telemetry
+    #[instrument(skip(self, input), err)]
+    pub async fn detect_threat(&self, input: Tensor) -> Result<Prediction, GuardianError> {
+        // Acquire thread permit
+        let _permit = self.thread_limiter.acquire().await.map_err(|e| GuardianError::MLError {
+            context: "Failed to acquire thread permit".to_string(),
+            source: Some(Box::new(e)),
+            severity: ErrorSeverity::High,
+            timestamp: time::OffsetDateTime::now_utc(),
+            correlation_id: uuid::Uuid::new_v4(),
+            category: ErrorCategory::ML,
+            retry_count: 0,
+        })?;
 
-        // Verify inference engine health
-        self.inference_engine.health_check().await?;
+        // Extract features
+        let features = self.feature_extractor.write().await
+            .extract_features(input).await?;
 
-        // Verify feature extractor health
-        self.feature_extractor.health_check().await?;
+        // Perform inference
+        let prediction = self.inference_engine.write().await
+            .infer(features).await?;
 
-        // Verify model manager health
-        self.model_manager.health_check().await?;
+        // Record metrics
+        self.record_metrics(&prediction).await;
 
-        // Verify training pipeline health
-        self.training_pipeline.health_check().await?;
-
-        Ok(())
+        Ok(prediction)
     }
 
-    /// Clean shutdown of ML engine components
-    pub async fn shutdown(&self) -> Result<()> {
-        info!("Initiating ML Engine shutdown");
+    /// Records telemetry for ML operations
+    #[instrument(skip(self, prediction))]
+    async fn record_metrics(&self, prediction: &Prediction) {
+        metrics::gauge!("guardian.ml.confidence", prediction.confidence as f64);
+        metrics::histogram!("guardian.ml.inference_time", prediction.inference_time.as_secs_f64());
+        metrics::counter!("guardian.ml.predictions_total", 1);
+    }
+
+    /// Updates ML models with version control
+    #[instrument(skip(self, model_data), err)]
+    pub async fn update_model(&self, model_data: Vec<u8>) -> Result<ModelVersion, GuardianError> {
+        let version = self.model_registry.write().await
+            .register_model(model_data).await?;
         
-        // Signal monitoring task to stop
-        if let Err(e) = self.shutdown_tx.send(()).await {
-            error!("Error sending shutdown signal: {}", e);
+        // Update inference engine with new model
+        self.inference_engine.write().await
+            .load_model(&version).await?;
+
+        info!("Successfully updated model to version: {}", version);
+        Ok(version)
+    }
+
+    /// Gets current ML subsystem metrics
+    #[instrument(skip(self))]
+    pub async fn get_metrics(&self) -> MLMetrics {
+        MLMetrics {
+            model_metrics: self.model_registry.read().await.get_metrics(),
+            feature_metrics: self.feature_extractor.read().await.get_metrics(),
+            inference_metrics: self.inference_engine.read().await.get_metrics(),
+            resource_usage: self.get_resource_usage(),
         }
+    }
 
-        // Cleanup components
-        self.model_registry.cleanup().await?;
-        self.inference_engine.cleanup().await?;
-        self.feature_extractor.cleanup().await?;
-        self.model_manager.cleanup().await?;
-        self.training_pipeline.cleanup().await?;
-
-        info!("ML Engine shutdown complete");
-        Ok(())
+    /// Calculates current resource usage
+    fn get_resource_usage(&self) -> f32 {
+        let available_permits = self.thread_limiter.available_permits();
+        let usage_percent = (self.config.max_threads - available_permits) as f32 
+            / self.config.max_threads as f32 * 100.0;
+        usage_percent
     }
 }
 
-impl Drop for MLEngine {
-    fn drop(&mut self) {
-        info!("ML Engine dropped");
-    }
+/// Comprehensive metrics for ML subsystem
+#[derive(Debug, Clone)]
+pub struct MLMetrics {
+    /// Model-related metrics
+    pub model_metrics: ModelMetrics,
+    /// Feature extraction metrics
+    pub feature_metrics: FeatureMetrics,
+    /// Inference engine metrics
+    pub inference_metrics: InferenceMetrics,
+    /// Current resource usage percentage
+    pub resource_usage: f32,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ml_config::MLConfig;
 
     #[tokio::test]
-    async fn test_ml_engine_initialization() {
-        let config = MLConfig::new();
-        let engine = MLEngine::init(config).await;
-        assert!(engine.is_ok());
+    async fn test_ml_config_validation() {
+        let invalid_config = MLConfig {
+            max_threads: 0,
+            ..Default::default()
+        };
+        assert!(MLSubsystem::validate_config(&invalid_config).is_err());
+
+        let valid_config = MLConfig::default();
+        assert!(MLSubsystem::validate_config(&valid_config).is_ok());
     }
 
     #[tokio::test]
-    async fn test_resource_monitoring() {
-        let monitor = Arc::new(RwLock::new(ResourceMonitor {
-            last_check: Instant::now(),
-            cpu_usage: 0.0,
-            memory_usage: 0.0,
-            gpu_usage: None,
-            performance_metrics: PerformanceMetrics::default(),
-        }));
-
-        let result = MLEngine::monitor_resources(&monitor).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_engine_shutdown() {
-        let config = MLConfig::new();
-        let engine = MLEngine::init(config).await.unwrap();
-        let result = engine.shutdown().await;
-        assert!(result.is_ok());
+    async fn test_resource_limits() {
+        let config = MLConfig::default();
+        let subsystem = MLSubsystem::new(config).await.unwrap();
+        assert_eq!(subsystem.thread_limiter.available_permits(), MAX_INFERENCE_THREADS);
     }
 }
