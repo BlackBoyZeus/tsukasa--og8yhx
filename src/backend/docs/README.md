@@ -2,179 +2,286 @@
 
 ## Overview
 
-AI Guardian is an autonomous security and management solution for proprietary gaming console platforms, built on a custom FreeBSD-based operating system. This document serves as the primary entry point for technical documentation of the backend system.
+AI Guardian is a high-performance, autonomous security and management solution for proprietary gaming console platforms. Built on a custom FreeBSD-based operating system and leveraging Temporal.io for workflow orchestration, the system provides continuous protection through advanced machine learning capabilities and real-time threat detection.
 
-## System Architecture
+Version: 1.0.0
+FIPS Compliance: 140-3
+Security Contact: security@aiguardian.system
 
-### Core Components
+## Table of Contents
 
-- **Guardian Core**: Central security coordination service written in Rust
-- **Temporal Engine**: Workflow orchestration using Temporal.io (v1.20+)
-- **ML Engine**: Threat detection using Burn (v0.8+) and Candle (v0.3+)
-- **System Monitor**: Real-time system metrics and event collection
-- **Secure Storage**: ZFS-based encrypted storage system
+1. [Installation](#installation)
+2. [Architecture](#architecture)
+3. [Security](#security)
+4. [Performance](#performance)
+5. [Configuration](#configuration)
+6. [API Reference](#api-reference)
+7. [ML System](#ml-system)
+8. [Monitoring](#monitoring)
+9. [Troubleshooting](#troubleshooting)
 
-### High-Level Architecture
-
-```mermaid
-graph TD
-    A[Guardian Core] --> B[Temporal Engine]
-    A --> C[ML Engine]
-    A --> D[System Monitor]
-    A --> E[Secure Storage]
-    
-    B --> F[Workflow Orchestration]
-    C --> G[Threat Detection]
-    D --> H[System Metrics]
-    E --> I[Data Protection]
-```
-
-## Security Architecture
-
-### Authentication & Authorization
-
-- mTLS with X.509 certificates (4096-bit RSA)
-- Hardware Security Module (HSM) integration
-- Role-Based Access Control (RBAC)
-- Multi-factor authentication support
-
-### Data Protection
-
-- AES-256-GCM encryption for data at rest
-- TLS 1.3 for data in transit
-- ZFS encryption with GELI
-- Secure memory management with Rust
-
-### Audit Logging
-
-- Cryptographically signed audit events
-- Secure central logging
-- 365-day retention policy
-- Real-time monitoring
-
-## Performance Specifications
-
-### System Requirements
-
-- CPU Usage: < 5% system overhead
-- Memory Usage: < 5% system memory
-- Response Time: < 100ms for critical events
-- Uptime: 99.999% availability
-
-### ML Performance
-
-- Inference Latency: < 20ms (P95)
-- Batch Processing: Up to 1000 req/sec
-- Model Accuracy: 99.999% threat detection
-- Resource Usage: < 5% GPU memory
-
-## Setup Instructions
+## Installation
 
 ### Prerequisites
 
-- FreeBSD 13.0+
+- FreeBSD 13.0 or higher
 - Rust 1.75+
-- CUDA/Metal support (optional)
-- HSM device configured
+- CUDA-capable GPU (optional, for ML acceleration)
+- Hardware Security Module (HSM)
+- Trusted Platform Module (TPM)
 
-### Environment Setup
+### System Requirements
 
-1. Install system dependencies:
+- CPU: 8 cores minimum
+- RAM: 16GB minimum
+- Storage: 100GB minimum with ZFS support
+- Network: 1Gbps minimum
+
+### Setup Steps
+
+1. Install FreeBSD dependencies:
 ```bash
-pkg install rust llvm openssl
+pkg install rust llvm openssl zfs temporal
 ```
 
-2. Configure security settings:
+2. Configure HSM:
 ```bash
-# Enable Capsicum
-sysctl security.capsicum.enabled=1
-
-# Configure ZFS encryption
-zfs create -o encryption=on -o keylocation=prompt -o keyformat=passphrase guardian/secure
+guardian-ctl hsm init --module /usr/lib/softhsm/libsofthsm2.so
+guardian-ctl hsm setup-keys
 ```
 
-3. Initialize the system:
+3. Initialize secure storage:
 ```bash
-cargo build --release
-./target/release/guardian init
+guardian-ctl storage init --pool guardian_pool --encryption aes-256-gcm
 ```
 
-## API Documentation
+4. Start core services:
+```bash
+service guardian start
+service temporal start
+```
 
-See [API.md](./API.md) for detailed API specifications.
+## Architecture
 
-## Security Documentation
+### Core Components
 
-See [SECURITY.md](./SECURITY.md) for comprehensive security documentation.
+```mermaid
+graph TD
+    A[Guardian Core] --> B[Security Engine]
+    A --> C[ML Engine]
+    A --> D[Temporal Engine]
+    
+    B --> E[FreeBSD Security]
+    B --> F[Hardware Security]
+    
+    C --> G[Inference Engine]
+    C --> H[Training Pipeline]
+    
+    D --> I[Workflow Orchestration]
+    D --> J[State Management]
+```
 
-## ML System Documentation
+### Key Features
 
-See [ML.md](./ML.md) for ML system architecture and operations.
+- Real-time threat detection using hardware-accelerated ML
+- FreeBSD kernel-level security integration
+- Temporal.io-based workflow orchestration
+- Zero-copy memory operations
+- Hardware security module (HSM) integration
+- Adaptive performance optimization
 
-## Development Guidelines
+## Security
 
-### Code Standards
+### Authentication & Authorization
 
-- Follow Rust 2021 edition guidelines
-- Comprehensive error handling required
-- Security-first development approach
-- Full test coverage mandatory
+- Multi-factor authentication with hardware token support
+- X.509 certificate-based service authentication
+- Role-based access control (RBAC)
+- Hardware-backed key management
 
-### Security Requirements
+### Encryption
 
-- All code must pass security audit
-- Memory-safe implementations only
-- Proper secret management
-- Regular dependency updates
+- AES-256-GCM for data at rest
+- TLS 1.3 for data in transit
+- HSM-backed key operations
+- Secure memory handling with automatic zeroing
 
-### Performance Requirements
+### Audit Logging
 
-- Optimize for low latency
-- Efficient resource usage
-- Proper error handling
-- Comprehensive metrics
+- Comprehensive security event logging
+- Tamper-evident log storage
+- Real-time log analysis
+- FIPS 140-3 compliant operations
 
-## Operational Procedures
+## Performance
 
-### Deployment
+### Optimization Features
 
-- Secure build pipeline
-- Signed artifacts
-- Atomic updates
-- Rollback support
+- GPU acceleration for ML inference
+- Zero-copy memory operations
+- Adaptive batch processing
+- Memory pooling and caching
+- Hardware-specific optimizations
 
-### Monitoring
+### Metrics
 
-- Real-time metrics
-- Security event tracking
+- Inference time: < 100ms
+- Threat detection accuracy: 99.999%
+- System overhead: < 5%
+- Memory efficiency: Zero-copy operations
+
+## Configuration
+
+### Core Configuration
+
+```yaml
+guardian:
+  security:
+    tls_version: "1.3"
+    encryption_algorithm: "AES-256-GCM"
+    key_rotation_days: 30
+    audit_log_path: "/var/log/guardian/audit.log"
+
+  ml:
+    batch_size: 128
+    inference_timeout_ms: 100
+    memory_limit_mb: 1024
+    gpu_enabled: true
+
+  temporal:
+    namespace: "guardian"
+    workflow_timeout: "24h"
+    retry_policy:
+      initial_interval: "1s"
+      max_interval: "1m"
+      max_attempts: 3
+```
+
+### Security Configuration
+
+```yaml
+security:
+  hsm:
+    module_path: "/usr/lib/softhsm/libsofthsm2.so"
+    slot_id: 0
+    key_label: "guardian-master-key"
+
+  tpm:
+    device: "/dev/tpm0"
+    pcr_mask: 0x0000001F
+    
+  rbac:
+    policy_path: "/etc/guardian/rbac/policy.yaml"
+```
+
+## API Reference
+
+### Core Services
+
+```protobuf
+service GuardianService {
+  rpc GetSystemStatus(Empty) returns (SystemStatus);
+  rpc MonitorEvents(EventStreamRequest) returns (stream SystemEvent);
+  rpc ExecuteResponse(SecurityResponse) returns (ResponseResult);
+}
+
+service SecurityService {
+  rpc DetectThreats(Empty) returns (stream ThreatAlert);
+  rpc ExecuteResponse(ThreatAlert) returns (SecurityResponse);
+}
+
+service MLService {
+  rpc InferenceRequest(ModelInferenceRequest) returns (InferenceResult);
+  rpc TrainModel(TrainingRequest) returns (TrainingJob);
+}
+```
+
+### Authentication
+
+All API endpoints require:
+- Mutual TLS (mTLS) authentication
+- Valid API tokens
+- RBAC authorization
+
+## ML System
+
+### Model Architecture
+
+```mermaid
+graph TD
+    A[Input Layer] --> B[Feature Extraction]
+    B --> C[LSTM Layer]
+    C --> D[Dense Layer]
+    D --> E[Output Layer]
+    
+    F[Hardware Acceleration] --> B
+    F --> C
+```
+
+### Training Pipeline
+
+- Automated model training
+- Performance validation
+- Security verification
+- Version control
+- Metrics collection
+
+## Monitoring
+
+### Core Metrics
+
+- System health status
+- Security threat levels
+- ML model performance
 - Resource utilization
-- Performance impact
+- API latency
 
-### Incident Response
+### Alerting
 
-- Automated threat detection
-- ML-based analysis
-- Autonomous response
-- Security team escalation
+Configure alerts in `/etc/guardian/alerts.yaml`:
+```yaml
+alerts:
+  - name: high_threat_level
+    condition: "threat_level > 0.8"
+    severity: critical
+    channels: ["security_team", "sysadmin"]
 
-## Version Information
+  - name: ml_performance_degradation
+    condition: "inference_time_ms > 100"
+    severity: warning
+    channels: ["ml_team"]
+```
 
-- Guardian Core: 1.0.0
-- Rust Version: 1.75+
-- Temporal.io: 1.20+
-- Burn ML: 0.8+
-- Candle: 0.3+
+## Troubleshooting
 
-## Support
+### Common Issues
 
-For technical support and security issues:
-- Security Team: security@guardian.example.com
-- Technical Support: support@guardian.example.com
+| Issue | Solution |
+|-------|----------|
+| High Latency | Check GPU utilization and batch size |
+| Memory Pressure | Verify memory pool configuration |
+| Security Alerts | Review audit logs and HSM status |
+| ML Errors | Check model validation metrics |
+
+### Logging
+
+Log locations:
+- System logs: `/var/log/guardian/system.log`
+- Security audit: `/var/log/guardian/audit.log`
+- ML metrics: `/var/log/guardian/ml.log`
+- Performance data: `/var/log/guardian/metrics.log`
+
+### Support
+
+For security issues:
+- Email: security@aiguardian.system
+- Emergency: Available 24/7 for critical incidents
+
+For general support:
+- Documentation: https://docs.aiguardian.system
+- Issue tracker: https://github.com/aiguardian/issues
 
 ## License
 
-Proprietary - All rights reserved
-
----
-
-**Note**: This documentation is confidential and intended for authorized personnel only.
+Copyright © 2024 AI Guardian
+All rights reserved.
