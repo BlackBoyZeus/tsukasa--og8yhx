@@ -1,0 +1,163 @@
+---
+# AI Guardian System Deployment Playbook
+# Version: 1.0.0
+# Requires: 
+# - ansible-core: 2.15+
+# - ansible.posix: 1.5+
+# - community.general: 7.0+
+
+- name: Deploy AI Guardian System
+  hosts: gaming_consoles
+  become: true
+  gather_facts: true
+
+  vars:
+    deployment:
+      environment: production
+      backup_enabled: true
+      verify_ssl: true
+      timeout: 3600
+      ml_verify: true
+    
+    system:
+      freebsd_version: '13.2'
+      min_memory: '8G'
+      min_storage: '100G'
+      gpu_required: true
+    
+    security:
+      capsicum_enabled: true
+      mac_enabled: true
+      audit_enabled: true
+      ml_model_encryption: true
+    
+    monitoring:
+      prometheus_version: 'v2.45.0'
+      grafana_version: '9.5.0'
+      alertmanager_version: 'v0.25.0'
+      ml_metrics_enabled: true
+
+  pre_tasks:
+    - name: Verify system requirements
+      assert:
+        that:
+          - ansible_distribution == "FreeBSD"
+          - ansible_distribution_version is version('13.2', '>=')
+          - ansible_memtotal_mb >= 8192
+          - ansible_mounts | map(attribute='size_total') | sum > 107374182400
+        msg: "System does not meet minimum requirements"
+      tags: [verify, system]
+
+    - name: Verify GPU availability
+      command: pciconf -lv
+      register: pci_devices
+      changed_when: false
+      failed_when: "'nvidia' not in pci_devices.stdout.lower() and 'amd' not in pci_devices.stdout.lower()"
+      tags: [verify, gpu]
+
+    - name: Create backup of existing configuration
+      when: deployment.backup_enabled
+      block:
+        - name: Create backup directory
+          file:
+            path: /var/backups/guardian/{{ ansible_date_time.iso8601 }}
+            state: directory
+            mode: '0700'
+        
+        - name: Backup existing configuration
+          copy:
+            src: "{{ item }}"
+            dest: "/var/backups/guardian/{{ ansible_date_time.iso8601 }}/"
+            remote_src: true
+          with_items:
+            - /usr/local/etc/guardian/
+            - /etc/rc.conf
+            - /etc/sysctl.conf
+      tags: [backup]
+
+  roles:
+    - role: common
+      tags: [system, base, ml_setup]
+    
+    - role: security
+      tags: [security, hardening, ml_security]
+    
+    - role: monitoring
+      tags: [monitoring, observability, ml_metrics]
+
+  post_tasks:
+    - name: Verify deployment
+      block:
+        - name: Check service status
+          service:
+            name: "{{ item }}"
+            state: started
+          register: service_status
+          with_items:
+            - guardian
+            - prometheus
+            - grafana
+            - alertmanager
+
+        - name: Verify ML model loading
+          command: guardian-ctl models list
+          register: ml_models
+          changed_when: false
+          failed_when: "'Guardian-v2.1' not in ml_models.stdout"
+
+        - name: Test ML inference performance
+          command: guardian-ctl ml benchmark
+          register: ml_benchmark
+          changed_when: false
+          failed_when: ml_benchmark.rc != 0
+
+        - name: Verify monitoring metrics
+          uri:
+            url: "https://localhost:9090/api/v1/query?query=up"
+            validate_certs: "{{ deployment.verify_ssl }}"
+            client_cert: /etc/guardian/certs/prometheus.crt
+            client_key: /etc/guardian/certs/prometheus.key
+            status_code: 200
+          register: metrics_check
+
+        - name: Generate deployment report
+          template:
+            src: deployment_report.j2
+            dest: /var/log/guardian/deployment_{{ ansible_date_time.iso8601 }}.log
+            mode: '0600'
+      rescue:
+        - name: Log deployment failure
+          debug:
+            msg: "Deployment verification failed"
+        - name: Fail deployment
+          fail:
+            msg: "Critical: Deployment verification failed"
+      tags: [verify, post-deploy]
+
+  handlers:
+    - name: Restart system services
+      service:
+        name: "{{ item }}"
+        state: restarted
+      with_items:
+        - guardian
+        - prometheus
+        - grafana
+        - alertmanager
+
+    - name: Reload ML models
+      command: guardian-ctl models reload
+      changed_when: true
+
+    - name: Reload configurations
+      command: guardian-ctl config reload
+      changed_when: true
+
+    - name: Update monitoring
+      command: guardian-ctl monitoring update
+      changed_when: true
+
+    - name: Restart ML services
+      service:
+        name: guardian-ml
+        state: restarted
