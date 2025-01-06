@@ -1,0 +1,101 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-server
+  namespace: guardian-system
+  labels:
+    app: temporal
+    component: server
+    part-of: ai-guardian
+    version: "1.20"
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: temporal
+      component: server
+  template:
+    metadata:
+      labels:
+        app: temporal
+        component: server
+        part-of: ai-guardian
+        version: "1.20"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "7234"
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: temporal
+                  component: server
+      containers:
+      - name: temporal
+        image: temporalio/server:1.20
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 7233
+          name: grpc
+          protocol: TCP
+        - containerPort: 7234
+          name: metrics
+          protocol: TCP
+        resources:
+          requests:
+            cpu: "1000m"
+            memory: "2Gi"
+          limits:
+            cpu: "2000m"
+            memory: "4Gi"
+        volumeMounts:
+        - name: temporal-config
+          mountPath: /etc/temporal/config
+          readOnly: true
+        - name: temporal-certs
+          mountPath: /etc/temporal/certs
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: metrics
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: metrics
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          timeoutSeconds: 3
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: temporal-config
+        configMap:
+          name: guardian-temporal-config
+      - name: temporal-certs
+        secret:
+          secretName: temporal-secrets
+      securityContext:
+        fsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
