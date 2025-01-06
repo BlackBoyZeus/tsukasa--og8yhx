@@ -1,0 +1,112 @@
+AI GUARDIAN PROPRIETARY LICENSE
+Version 1.0, January 2024
+
+TERMS AND CONDITIONS FOR USE, MODIFICATION AND DISTRIBUTION
+
+1. DEFINITIONS
+
+1.1. "AI Guardian System" means the proprietary security and management solution for gaming consoles, including all Rust-based services, FreeBSD kernel modules, ML models, and associated components.
+
+1.2. "ML Components" means all machine learning models, training data, inference engines, and associated algorithms used within the system.
+
+1.3. "Security Features" means all mechanisms, implementations, and configurations related to system security.
+
+1.4. "Gaming Console Integration" means all components specifically designed for gaming platform deployment.
+
+1.5. "Third-Party Components" means external software components integrated into the system, including but not limited to FreeBSD, Rust, and Temporal.io.
+
+2. GRANT OF LICENSE
+
+2.1. Subject to strict compliance with these terms, Licensor grants Licensee a non-transferable, non-exclusive license to:
+   a) Deploy the AI Guardian System on authorized gaming console platforms
+   b) Use ML Components for authorized security operations
+   c) Implement Security Features within specified parameters
+   d) Integrate with approved gaming platforms
+
+2.2. All rights not expressly granted are reserved by Licensor.
+
+3. RESTRICTIONS
+
+3.1. Licensee shall not:
+   a) Reverse engineer, decompile, or disassemble any ML Components
+   b) Disclose Security Feature implementations or configurations
+   c) Deploy on unauthorized gaming platforms
+   d) Modify system components except as explicitly permitted
+   e) Share, distribute, or sublicense any system components
+
+4. PROPRIETARY RIGHTS
+
+4.1. All intellectual property rights in the AI Guardian System, including:
+   a) ML algorithms and models
+   b) Security implementation details
+   c) System architecture and design
+   d) Gaming platform integration methods
+remain the exclusive property of Licensor.
+
+5. CONFIDENTIALITY
+
+5.1. Licensee shall maintain strict confidentiality of:
+   a) Security implementation details
+   b) ML model architectures and training data
+   c) System design and architecture
+   d) Gaming platform integration specifications
+
+5.2. Confidentiality obligations survive termination of this license.
+
+6. TERM AND TERMINATION
+
+6.1. This license remains effective until terminated.
+
+6.2. Licensor may terminate immediately upon:
+   a) Breach of any term
+   b) Unauthorized system modification
+   c) Confidentiality violations
+   d) Gaming platform policy violations
+
+6.3. Upon termination:
+   a) All usage rights cease immediately
+   b) System must be completely uninstalled
+   c) Confidential information must be destroyed
+   d) Certification of compliance required
+
+7. WARRANTY DISCLAIMER
+
+7.1. THE AI GUARDIAN SYSTEM IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO:
+   a) Security feature effectiveness
+   b) ML model performance
+   c) Gaming platform compatibility
+   d) Third-party component operation
+
+8. LIMITATION OF LIABILITY
+
+8.1. LICENSOR SHALL NOT BE LIABLE FOR:
+   a) Security incidents or breaches
+   b) ML model performance issues
+   c) Gaming platform integration problems
+   d) Consequential or incidental damages
+
+9. GOVERNING LAW
+
+9.1. This license is governed by [Jurisdiction] law.
+
+9.2. Licensee must comply with:
+   a) Gaming industry regulations
+   b) Export control restrictions
+   c) Data protection laws
+   d) International trade regulations
+
+10. THIRD-PARTY LICENSES
+
+10.1. FreeBSD components are subject to the FreeBSD License
+10.2. Rust components are subject to MIT/Apache 2.0 License
+10.3. Temporal.io components are subject to Temporal.io Commercial License
+10.4. Other open source components are subject to their respective licenses
+
+11. ACKNOWLEDGMENT
+
+By using the AI Guardian System, Licensee acknowledges reading and agreeing to these terms and conditions.
+
+[End of License]
+
+Copyright © 2024 [AI Guardian System Owner]
+All Rights Reserved
