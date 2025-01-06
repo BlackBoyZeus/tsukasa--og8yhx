@@ -1,0 +1,38 @@
+[toolchain]
+# Rust version 1.75.0 specified for memory safety and performance optimizations
+channel = "1.75.0"
+
+# Required components for development, testing, and security analysis
+components = [
+    "rustfmt",          # Code formatting
+    "clippy",           # Linting and static analysis
+    "rust-src",         # Source code for standard library
+    "rust-analyzer",    # IDE support
+    "llvm-tools-preview", # Required for coverage and advanced optimizations
+    "miri"              # Undefined behavior detector
+]
+
+# FreeBSD targets for both x86_64 and aarch64 architectures
+targets = [
+    "x86_64-unknown-freebsd",
+    "aarch64-unknown-freebsd"
+]
+
+# Profile configuration for development environment setup
+[profile]
+default = true         # Use default profile settings
+dev-dependencies = true # Include development dependencies
+documentation = true   # Build and include documentation
+compiler-docs = true   # Include compiler documentation
+tools = true          # Install development tools
+components = true     # Install all specified components
+
+# Profile optimizations for production builds
+[profile.release]
+opt-level = 3         # Maximum optimization
+debug = false         # No debug symbols in release
+debug-assertions = false # Disable debug assertions
+codegen-units = 1     # Optimize for size
+lto = true           # Enable link-time optimization
+panic = "abort"      # Abort on panic for minimal binary size
+incremental = false  # Disable incremental compilation in release
