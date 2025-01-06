@@ -2,13 +2,19 @@
   "compilerOptions": {
     "target": "ES2020",
     "module": "commonjs",
-    "lib": ["ES2020"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "outDir": "./dist",
-    "rootDir": "./src",
-    "strict": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
     "noImplicitAny": true,
     "strictNullChecks": true,
     "strictFunctionTypes": true,
@@ -20,27 +26,28 @@
     "noUnusedParameters": true,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
-    "moduleResolution": "node",
-    "baseUrl": "./",
+    "baseUrl": ".",
     "paths": {
-      "*": [
-        "node_modules/*",
-        "src/types/*"
-      ]
+      "*": ["node_modules/*"],
+      "@proto/*": ["src/api/proto/*"],
+      "@grpc/*": ["src/api/grpc/*"],
+      "@security/*": ["src/security/*"],
+      "@ml/*": ["src/ml/*"],
+      "@core/*": ["src/core/*"]
     },
-    "esModuleInterop": true,
-    "experimentalDecorators": true,
-    "emitDecoratorMetadata": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "types": ["node"],
+    "lib": ["ES2020"]
   },
   "include": [
-    "src/**/*"
+    "src/**/*.ts",
+    "src/**/*.proto",
+    "src/**/*.json"
   ],
   "exclude": [
     "node_modules",
     "dist",
+    "**/*.test.ts",
     "**/*.spec.ts",
-    "**/*.test.ts"
+    "**/__tests__/*"
   ]
 }
