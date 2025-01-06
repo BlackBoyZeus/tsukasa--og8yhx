@@ -1,0 +1,181 @@
+name: Backend Continuous Deployment
+
+on:
+  workflow_run:
+    workflows: ["Backend CI", "Security Scan"]
+    types:
+      - completed
+    branches:
+      - main
+      - release/*
+
+env:
+  DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+  DOCKER_IMAGE: guardian/backend
+  RUST_VERSION: "1.75.0"
+  TF_WORKSPACE: production
+  TEMPORAL_NAMESPACE: guardian
+  DEPLOYMENT_STRATEGY: blue_green
+  RESOURCE_THRESHOLD: "5"
+  TPM_VERIFICATION: required
+  HEALTH_CHECK_INTERVAL: "10"
+  ROLLBACK_TIMEOUT: "300"
+
+permissions:
+  contents: read
+  packages: write
+  deployments: write
+  id-token: write
+
+jobs:
+  prepare:
+    name: Prepare Deployment
+    runs-on: [self-hosted, freebsd]
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      security_validated: ${{ steps.security.outputs.validated }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Verify TPM state
+        id: tpm
+        run: |
+          guardian-cli verify-tpm --strict
+          echo "tpm_verified=true" >> $GITHUB_OUTPUT
+          
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=$(grep '^version = ' src/backend/Cargo.toml | cut -d'"' -f2)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+      - name: Validate security context
+        id: security
+        run: |
+          guardian-cli security-check \
+            --tpm-state ${{ steps.tpm.outputs.tpm_verified }} \
+            --scan-results ${{ github.event.workflow_run.artifacts.security_report }} \
+            --ci-results ${{ github.event.workflow_run.artifacts.test_results }}
+
+  build:
+    name: Build Container
+    needs: prepare
+    runs-on: [self-hosted, freebsd]
+    if: needs.prepare.outputs.security_validated == 'true'
+    
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: freebsd/amd64,freebsd/arm64
+          
+      - name: Login to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+          
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infrastructure/docker/backend.Dockerfile
+          platforms: freebsd/amd64,freebsd/arm64
+          push: true
+          tags: |
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE }}:${{ needs.prepare.outputs.version }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE }}:latest
+          cache-from: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE }}:buildcache,mode=max
+          build-args: |
+            RUST_VERSION=${{ env.RUST_VERSION }}
+            BUILD_VERSION=${{ needs.prepare.outputs.version }}
+          labels: |
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            
+  deploy:
+    name: Deploy Backend
+    needs: [prepare, build]
+    runs-on: [self-hosted, freebsd]
+    environment: production
+    concurrency: production_deploy
+    
+    steps:
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.0"
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          
+      - name: Initialize deployment
+        run: |
+          guardian-cli deployment init \
+            --environment production \
+            --version ${{ needs.prepare.outputs.version }} \
+            --strategy ${{ env.DEPLOYMENT_STRATEGY }}
+            
+      - name: Apply infrastructure changes
+        run: |
+          terraform init
+          terraform workspace select ${{ env.TF_WORKSPACE }}
+          terraform apply -auto-approve \
+            -var="image_version=${{ needs.prepare.outputs.version }}" \
+            -var="temporal_namespace=${{ env.TEMPORAL_NAMESPACE }}"
+            
+      - name: Execute deployment
+        id: deploy
+        run: |
+          guardian-cli deployment execute \
+            --environment production \
+            --version ${{ needs.prepare.outputs.version }} \
+            --timeout 1800 \
+            --health-interval ${{ env.HEALTH_CHECK_INTERVAL }} \
+            --resource-threshold ${{ env.RESOURCE_THRESHOLD }}
+            
+  health-check:
+    name: Validate Deployment
+    needs: [prepare, deploy]
+    runs-on: [self-hosted, freebsd]
+    
+    steps:
+      - name: Monitor deployment health
+        run: |
+          guardian-cli health monitor \
+            --environment production \
+            --duration 900 \
+            --interval ${{ env.HEALTH_CHECK_INTERVAL }} \
+            --threshold ${{ env.RESOURCE_THRESHOLD }}
+            
+      - name: Verify security posture
+        run: |
+          guardian-cli security verify \
+            --environment production \
+            --tpm-verification ${{ env.TPM_VERIFICATION }}
+            
+  rollback:
+    name: Rollback Deployment
+    needs: [prepare, deploy]
+    runs-on: [self-hosted, freebsd]
+    if: failure()
+    
+    steps:
+      - name: Execute rollback
+        run: |
+          guardian-cli deployment rollback \
+            --environment production \
+            --version ${{ needs.prepare.outputs.version }} \
+            --timeout ${{ env.ROLLBACK_TIMEOUT }}
+            
+      - name: Notify security team
+        if: always()
+        run: |
+          guardian-cli notify security-team \
+            --severity high \
+            --event "Deployment rollback executed" \
+            --version ${{ needs.prepare.outputs.version }}
