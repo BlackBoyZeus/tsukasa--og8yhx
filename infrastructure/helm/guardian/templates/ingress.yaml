@@ -1,0 +1,109 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ template "guardian.fullname" . }}
+  labels:
+    {{- include "guardian.labels" . | nindent 4 }}
+  annotations:
+    # Ingress class and controller configuration
+    kubernetes.io/ingress.class: {{ .Values.ingress.class | default "nginx" | quote }}
+    
+    # TLS and security configurations
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-min-version: "TLSv1.3"
+    nginx.ingress.kubernetes.io/ssl-ciphers: "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384"
+    nginx.ingress.kubernetes.io/ssl-prefer-server-ciphers: "true"
+    
+    # mTLS configuration if enabled
+    {{- if .Values.ingress.mtls.enabled }}
+    nginx.ingress.kubernetes.io/auth-tls-verify-client: "on"
+    nginx.ingress.kubernetes.io/auth-tls-secret: {{ printf "%s/%s" .Release.Namespace .Values.ingress.mtls.clientCASecret | quote }}
+    nginx.ingress.kubernetes.io/auth-tls-verify-depth: {{ .Values.ingress.mtls.verifyDepth | default "1" | quote }}
+    {{- end }}
+    
+    # Security headers and policies
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload";
+      more_set_headers "Content-Security-Policy: default-src 'self'; frame-ancestors 'none'";
+      more_set_headers "Permissions-Policy: geolocation=(), microphone=(), camera=()";
+    
+    # ModSecurity WAF configuration
+    nginx.ingress.kubernetes.io/enable-modsecurity: "true"
+    nginx.ingress.kubernetes.io/enable-owasp-core-rules: "true"
+    nginx.ingress.kubernetes.io/modsecurity-snippet: |
+      SecRuleEngine On
+      SecRequestBodyAccess On
+      SecAuditEngine RelevantOnly
+      SecAuditLogParts ABIJDEFHZ
+    
+    # Rate limiting and request size controls
+    nginx.ingress.kubernetes.io/limit-rps: {{ .Values.ingress.rateLimit | default "100" | quote }}
+    nginx.ingress.kubernetes.io/limit-connections: {{ .Values.ingress.connectionLimit | default "50" | quote }}
+    nginx.ingress.kubernetes.io/proxy-body-size: {{ .Values.ingress.maxBodySize | default "10m" | quote }}
+    
+    # Backend protocol and timeouts
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: {{ .Values.ingress.timeouts.connect | default "5" | quote }}
+    nginx.ingress.kubernetes.io/proxy-read-timeout: {{ .Values.ingress.timeouts.read | default "60" | quote }}
+    nginx.ingress.kubernetes.io/proxy-send-timeout: {{ .Values.ingress.timeouts.send | default "60" | quote }}
+    
+    # Monitoring and logging
+    nginx.ingress.kubernetes.io/enable-access-log: "true"
+    nginx.ingress.kubernetes.io/enable-rewrite-log: "true"
+    
+    # Certificate management
+    {{- if .Values.ingress.certManager.enabled }}
+    cert-manager.io/cluster-issuer: {{ .Values.ingress.certManager.issuer | quote }}
+    cert-manager.io/issuer-kind: {{ .Values.ingress.certManager.issuerKind | default "ClusterIssuer" | quote }}
+    {{- end }}
+
+spec:
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        {{- range .Values.ingress.hosts }}
+        - {{ .host | quote }}
+        {{- end }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          # API endpoints
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ template "guardian.fullname" $ }}-backend
+                port:
+                  number: {{ $.Values.backend.ports.http }}
+          
+          # Metrics endpoint (if monitoring enabled)
+          {{- if $.Values.monitoring.prometheus.enabled }}
+          - path: /metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ template "guardian.fullname" $ }}-monitoring
+                port:
+                  number: {{ $.Values.backend.metrics.port }}
+          {{- end }}
+          
+          # Temporal.io frontend (if enabled)
+          {{- if $.Values.temporal.enabled }}
+          - path: /temporal
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ template "guardian.fullname" $ }}-temporal-frontend
+                port:
+                  number: 7233
+          {{- end }}
+    {{- end }}
+{{- end }}
