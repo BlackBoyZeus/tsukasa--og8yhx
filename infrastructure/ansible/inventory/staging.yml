@@ -1,0 +1,126 @@
+# Ansible Inventory for AI Guardian Staging Environment
+# ansible-core version: 2.15+
+
+# Global variables for all hosts
+all:
+  vars:
+    ansible_python_interpreter: /usr/local/bin/python3
+    ansible_connection: ssh
+    ansible_ssh_common_args: >-
+      -o StrictHostKeyChecking=yes 
+      -o UserKnownHostsFile=/etc/ssh/known_hosts 
+      -o Ciphers=aes256-gcm@openssh.com,chacha20-poly1305@openssh.com 
+      -o MACs=hmac-sha2-512-etm@openssh.com
+
+# Parent group for all staging gaming consoles
+gaming_consoles_staging:
+  vars:
+    ansible_user: guardian_admin
+    ansible_become_method: sudo
+    ansible_become: true
+    freebsd_version: "13.2"
+    environment: staging
+    debug_level: verbose
+    audit_enabled: true
+    security_level: high
+    security_config:
+      audit_level: high
+      mac_policies: [biba, mls]
+      capsicum_services: [guardian-core, ml-engine]
+      pf_enabled: true
+      ipfw_enabled: false
+      secure_path: /usr/local/bin:/usr/bin:/bin
+      allowed_syscalls:
+        - socket
+        - bind
+        - listen
+        - accept
+        - connect
+        - read
+        - write
+        - close
+    monitoring_config:
+      prometheus_version: v2.45.0
+      grafana_version: 9.5.0
+      alertmanager_version: v0.25.0
+      scrape_interval: 15s
+      metrics_path: /metrics
+      evaluation_interval: 15s
+      retention_period: 15d
+    system_config:
+      timezone: UTC
+      locale: en_US.UTF-8
+      kernel_params:
+        security.bsd.hardening: 1
+        kern.randompid: 1
+        kern.securelevel: 2
+        kern.sugid_coredump: 0
+        kern.msgbuf_show_timestamp: 1
+    staging_specific:
+      debug_mode: true
+      verbose_logging: true
+      test_data_enabled: true
+      performance_monitoring: true
+      profiling_enabled: true
+      trace_level: debug
+      log_retention: 7d
+      cleanup_interval: 1d
+
+  children:
+    # Core services group
+    core_services_staging:
+      vars:
+        guardian_role: core
+        min_memory: 8G
+        min_cpu_cores: 4
+        capsicum_enabled: true
+        mac_policies: [biba, mls]
+        jail_parameters:
+          allow_raw_sockets: false
+          allow_socket_af: false
+          allow_mlock: false
+      hosts:
+        core-staging-[01:03].guardian.local:
+
+    # ML engine group
+    ml_engines_staging:
+      vars:
+        guardian_role: ml
+        min_memory: 16G
+        min_cpu_cores: 8
+        gpu_required: true
+        gpu_type: nvidia
+        cuda_version: "11.8"
+        model_cache_size: 8G
+        inference_timeout: 5s
+      hosts:
+        ml-staging-[01:02].guardian.local:
+
+    # Storage nodes group
+    storage_nodes_staging:
+      vars:
+        guardian_role: storage
+        min_storage: 100G
+        zfs_encryption: true
+        geli_enabled: true
+        zfs_compression: lz4
+        zfs_atime: "off"
+        zfs_redundancy: mirror
+        backup_enabled: true
+      hosts:
+        storage-staging-[01:02].guardian.local:
+
+    # Monitoring nodes group
+    monitoring_nodes_staging:
+      vars:
+        guardian_role: monitoring
+        min_memory: 4G
+        min_storage: 50G
+        metrics_retention: 15d
+        prometheus_version: v2.45.0
+        grafana_version: 9.5.0
+        alertmanager_version: v0.25.0
+        scrape_interval: 15s
+        alert_retention: 7d
+      hosts:
+        monitor-staging-01.guardian.local:
