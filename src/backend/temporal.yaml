@@ -1,0 +1,153 @@
+# Temporal.io Configuration for AI Guardian System
+# Version: 1.0.0
+
+namespace: guardian
+server:
+  host: localhost
+  port: 7233
+  tls:
+    enabled: true
+    cert_path: /etc/guardian/certs/temporal.crt
+    key_path: /etc/guardian/certs/temporal.key
+
+task_queues:
+  default:
+    name: guardian.default
+    priority: normal
+    max_concurrent: 100
+  security:
+    name: guardian.security
+    priority: high
+    max_concurrent: 50
+    rate_limiting:
+      requests_per_second: 1000
+      burst_size: 100
+  monitoring:
+    name: guardian.monitoring
+    priority: normal
+    max_concurrent: 30
+    rate_limiting:
+      requests_per_second: 500
+      burst_size: 50
+  maintenance:
+    name: guardian.maintenance
+    priority: low
+    max_concurrent: 20
+    rate_limiting:
+      requests_per_second: 200
+      burst_size: 20
+
+timeouts:
+  workflow_execution: 3600s
+  workflow_run: 300s
+  activity_execution:
+    security: 1s
+    monitoring: 5s
+    maintenance: 30s
+  activity_heartbeat: 10s
+  schedule_to_close: 600s
+
+retry_policies:
+  security_activities:
+    initial_interval: 100ms
+    max_interval: 1s
+    backoff_coefficient: 1.5
+    max_attempts: 3
+    circuit_breaker:
+      failure_threshold: 5
+      reset_timeout: 30s
+  monitoring_activities:
+    initial_interval: 1s
+    max_interval: 10s
+    backoff_coefficient: 1.5
+    max_attempts: 5
+    circuit_breaker:
+      failure_threshold: 3
+      reset_timeout: 60s
+  maintenance_activities:
+    initial_interval: 5s
+    max_interval: 30s
+    backoff_coefficient: 2.0
+    max_attempts: 3
+
+worker_pools:
+  security:
+    min_workers: 10
+    max_workers: 50
+    adaptive_sizing: true
+    polling_interval: 100ms
+  monitoring:
+    min_workers: 5
+    max_workers: 30
+    adaptive_sizing: true
+    polling_interval: 500ms
+  maintenance:
+    min_workers: 2
+    max_workers: 10
+    adaptive_sizing: true
+    polling_interval: 1s
+
+resource_limits:
+  cpu_percent: 5
+  memory_mb: 512
+  batch_size:
+    min: 10
+    max: 100
+    adaptive: true
+  concurrent_workflows: 1000
+
+telemetry:
+  metrics_prefix: guardian
+  logging_enabled: true
+  tracing_enabled: true
+  opentelemetry:
+    endpoint: http://telemetry:4317
+    service_name: guardian-temporal
+    sampling_rate: 0.1
+  metrics:
+    statsd:
+      host: localhost
+      port: 8125
+      prefix: guardian.temporal
+    prometheus:
+      enabled: true
+      port: 9090
+
+archival:
+  history:
+    enabled: true
+    provider: zfs
+    retention_days: 90
+  visibility:
+    enabled: true
+    provider: zfs
+    retention_days: 30
+
+security:
+  encryption:
+    enabled: true
+    provider: aes-256-gcm
+  authorization:
+    enabled: true
+    provider: rbac
+  audit_logging:
+    enabled: true
+    level: info
+    retention_days: 90
+
+dynamic_config:
+  frontend:
+    max_concurrent_workflows: 10000
+    max_workflow_history_size: 50000
+  matching:
+    max_tasks_per_second: 10000
+  history:
+    max_concurrent_activities: 5000
+    max_concurrent_timers: 2000
+
+advanced:
+  workflow_cache_size: 10000
+  activity_cache_size: 5000
+  enable_local_activities: true
+  enable_sticky_execution: true
+  sticky_schedule_to_start_timeout: 5s
