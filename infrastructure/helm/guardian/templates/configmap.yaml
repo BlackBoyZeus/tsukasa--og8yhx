@@ -1,0 +1,129 @@
+# ConfigMap template for AI Guardian system configuration
+# Version: 1.0.0
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "guardian.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ include "guardian.name" . }}
+    helm.sh/chart: {{ include "guardian.chart" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    environment.freebsd.org/type: gaming-console
+data:
+  # Core application configuration
+  app-config.yaml: |
+    app_name: {{ .Values.global.namespace }}
+    environment: {{ .Values.global.environment | default "production" }}
+    version: {{ .Chart.AppVersion }}
+    log_level: {{ .Values.backend.logLevel | default "info" }}
+    resources:
+      max_threads: {{ .Values.backend.resources.limits.cpu }}
+      memory_limit: {{ .Values.backend.resources.limits.memory }}
+    timeouts:
+      request: {{ .Values.backend.healthCheck.timeoutSeconds }}s
+      shutdown: 30s
+
+  # Enhanced security configuration with FreeBSD features
+  security-config.yaml: |
+    tls:
+      version: "1.3"
+      cipher_suites:
+        - TLS_AES_256_GCM_SHA384
+        - TLS_CHACHA20_POLY1305_SHA256
+      cert_path: /etc/certs/guardian
+      key_path: /etc/certs/guardian/private
+    
+    authentication:
+      methods:
+        - mTLS
+        - token
+      token_expiry: 24h
+      session_timeout: 15m
+    
+    freebsd_security:
+      capsicum:
+        enabled: {{ .Values.global.security.capsicum.enabled }}
+        capabilities: {{ toYaml .Values.global.security.capsicum.capabilities | nindent 8 }}
+      tpm:
+        enabled: {{ .Values.global.security.tpm.enabled }}
+        device_path: {{ .Values.global.security.tpm.devicePath }}
+      kernel:
+        securelevel: {{ .Values.global.freebsd.sysctls.kern.securelevel }}
+        modules: {{ toYaml .Values.global.freebsd.kernelModules | nindent 8 }}
+    
+    encryption:
+      algorithm: AES-256-GCM
+      key_rotation_interval: 30d
+      hsm_enabled: true
+      zfs_encryption: {{ .Values.backend.zfs.encryption }}
+
+  # Temporal.io workflow configuration
+  temporal-config.yaml: |
+    namespace: {{ .Values.temporal.server.namespace | default "guardian" }}
+    address: {{ .Values.temporal.server.address | default "temporal-frontend:7233" }}
+    workers:
+      count: {{ .Values.temporal.workers.replicaCount }}
+      task_queue: guardian-tasks
+      activities_concurrency: {{ .Values.temporal.workers.resources.limits.cpu }}
+    security:
+      mtls_enabled: {{ .Values.temporal.server.security.tls.enabled }}
+      cert_path: {{ .Values.temporal.server.security.tls.certPath }}
+      encryption:
+        enabled: {{ .Values.temporal.server.security.encryption.enabled }}
+        provider: {{ .Values.temporal.server.security.encryption.provider }}
+
+  # FreeBSD-specific system configuration
+  freebsd-config.yaml: |
+    kernel:
+      modules: {{ toYaml .Values.global.freebsd.kernelModules | nindent 8 }}
+      sysctls:
+        {{ toYaml .Values.global.freebsd.sysctls | nindent 8 }}
+    
+    zfs:
+      dataset: {{ .Values.backend.zfs.dataset }}
+      compression: {{ .Values.backend.zfs.compression }}
+      encryption: {{ .Values.backend.zfs.encryption }}
+      options:
+        atime: off
+        dedup: off
+        recordsize: 128k
+    
+    jail:
+      enabled: true
+      enforce_statfs: 2
+      allow_raw_sockets: false
+      allow_sysvipc: false
+      children_max: 0
+    
+    audit:
+      enabled: true
+      retention: 30d
+      events:
+        - login
+        - exec
+        - file-write
+        - security-policy
+
+  # Monitoring and metrics configuration
+  monitoring-config.yaml: |
+    metrics:
+      enabled: {{ .Values.backend.metrics.enabled }}
+      port: {{ .Values.backend.metrics.port }}
+      path: {{ .Values.backend.metrics.path }}
+      retention: {{ .Values.backend.metrics.retention }}
+      scrape_interval: {{ .Values.backend.metrics.scrapeInterval }}
+    
+    health_check:
+      enabled: {{ .Values.backend.healthCheck.enabled }}
+      path: {{ .Values.backend.healthCheck.path }}
+      initial_delay: {{ .Values.backend.healthCheck.initialDelaySeconds }}
+      period: {{ .Values.backend.healthCheck.periodSeconds }}
+      timeout: {{ .Values.backend.healthCheck.timeoutSeconds }}
+      failure_threshold: {{ .Values.backend.healthCheck.failureThreshold }}
+      success_threshold: {{ .Values.backend.healthCheck.successThreshold }}
+    
+    alerts:
+      rules:
+        {{ toYaml .Values.monitoring.prometheus.serverFiles.alerting_rules.groups | nindent 8 }}
