@@ -1,0 +1,116 @@
+Copyright (c) 2024 AI Guardian Project. All rights reserved.
+SPDX-License-Identifier: FreeBSD AND Proprietary
+
+I. COPYRIGHT NOTICE
+------------------
+Copyright (c) 2024 AI Guardian Project
+All rights reserved.
+
+For licensing inquiries, contact:
+AI Guardian Project Licensing Team
+licensing@aiguardian.example.com
+
+II. FREEBSD COMPONENTS LICENSE
+-----------------------------
+Redistribution and use in source and binary forms of FreeBSD-derived components, 
+with or without modification, are permitted provided that the following conditions 
+are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+This applies specifically to:
+- Modified FreeBSD kernel modules
+- System integration components
+- FreeBSD security feature implementations (Capsicum, MAC Framework, GELI)
+- Kernel subsystem modifications
+- System monitoring interfaces
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES.
+
+III. PROPRIETARY COMPONENTS LICENSE
+---------------------------------
+The following components are proprietary and confidential to AI Guardian Project:
+
+1. Machine Learning Components
+   - Model architectures and implementations
+   - Training methodologies
+   - Inference optimizations
+   - Security parameter configurations
+
+2. Gaming Console Integration
+   - Hardware-specific optimizations
+   - Secure boot mechanisms
+   - TPM/HSM interfaces
+   - Custom security implementations
+
+3. Protection Mechanisms
+   - Threat detection systems
+   - Runtime protection features
+   - Memory protection schemes
+   - Security policy enforcement
+
+RESTRICTIONS:
+1. No redistribution of proprietary components
+2. No modification of gaming console integrations
+3. No reverse engineering of protection mechanisms
+4. Use only on authorized gaming console hardware
+5. No disclosure of ML model architectures
+6. No extraction of security parameters
+7. No unauthorized system modifications
+8. No bypassing of secure boot process
+
+IV. THIRD-PARTY COMPONENTS
+-------------------------
+This software includes the following third-party components:
+
+FreeBSD Operating System
+- Copyright (c) The FreeBSD Project
+- Licensed under the FreeBSD License
+- Full license text available at: https://www.freebsd.org/copyright/freebsd-license/
+
+Security Frameworks
+- Capsicum capability framework
+- MAC (Mandatory Access Control) framework
+- GELI encryption subsystem
+
+All third-party components are used in accordance with their respective licenses.
+Full attribution and license texts are maintained in the project documentation.
+
+V. COMPLIANCE REQUIREMENTS
+-------------------------
+1. FreeBSD Components
+   - Maintain all copyright notices
+   - Provide source code access for BSD components
+   - Retain all disclaimers and notices
+   - Comply with FreeBSD license terms
+
+2. Proprietary Components
+   - Maintain strict confidentiality
+   - Enforce usage restrictions
+   - Protect intellectual property
+   - Monitor compliance
+
+VI. GENERAL PROVISIONS
+---------------------
+1. This license agreement is governed by applicable international intellectual
+   property laws.
+
+2. Any violation of these terms will result in immediate termination of the
+   license and may subject the violator to legal action.
+
+3. This license may be updated periodically. Users will be notified of any
+   changes.
+
+4. Questions about this license should be directed to the licensing team at
+   licensing@aiguardian.example.com
+
+END OF LICENSE
