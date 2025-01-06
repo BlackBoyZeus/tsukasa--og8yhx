@@ -1,0 +1,127 @@
+syntax = "proto3";
+
+package guardian.security.v1;
+
+import "google/protobuf/timestamp.proto";  // v3.0.0
+import "google/protobuf/empty.proto";      // v3.0.0
+import "ml.proto";                         // Internal ML service definitions
+
+option go_package = "guardian/security/v1/proto";
+option java_package = "com.guardian.security.v1.proto";
+
+// Enumeration of threat severity levels
+enum ThreatSeverity {
+    THREAT_SEVERITY_UNKNOWN = 0;
+    THREAT_SEVERITY_LOW = 1;
+    THREAT_SEVERITY_MEDIUM = 2;
+    THREAT_SEVERITY_HIGH = 3;
+    THREAT_SEVERITY_CRITICAL = 4;
+}
+
+// System health status enumeration
+enum SystemHealth {
+    SYSTEM_HEALTH_UNKNOWN = 0;
+    SYSTEM_HEALTH_HEALTHY = 1;
+    SYSTEM_HEALTH_DEGRADED = 2;
+    SYSTEM_HEALTH_CRITICAL = 3;
+}
+
+// Current security status of the system
+message SecurityStatus {
+    uint32 active_threats = 1;
+    ThreatSeverity threat_level = 2;
+    google.protobuf.Timestamp last_scan = 3;
+    float system_integrity = 4;  // 0.0-1.0 scale
+    SystemHealth system_health = 5;
+    map<string, uint32> threat_counts = 6;  // Count by severity
+}
+
+// Detailed threat context information
+message ThreatContext {
+    string process_id = 1;
+    string memory_region = 2;
+    repeated string affected_components = 3;
+    map<string, string> system_state = 4;
+    bytes evidence_data = 5;
+}
+
+// Comprehensive threat alert details
+message ThreatAlert {
+    string id = 1;  // UUID format
+    ThreatSeverity severity = 2;
+    google.protobuf.Timestamp detected_at = 3;
+    string source = 4;
+    string description = 5;
+    guardian.ml.v1.PredictResponse ml_confidence = 6;
+    ThreatContext context = 7;
+    repeated string tags = 8;
+}
+
+// Response parameter definition
+message ResponseParameter {
+    oneof value {
+        string string_value = 1;
+        int64 int_value = 2;
+        bool bool_value = 3;
+        bytes bytes_value = 4;
+    }
+}
+
+// Security response action details
+message ResponseAction {
+    string threat_id = 1;
+    string action_type = 2;
+    map<string, ResponseParameter> parameters = 3;
+    google.protobuf.Timestamp initiated_at = 4;
+    string workflow_id = 5;
+    repeated string dependencies = 6;
+}
+
+// Response execution result
+message ResponseResult {
+    string action_id = 1;
+    bool success = 2;
+    string error_message = 3;
+    google.protobuf.Timestamp completed_at = 4;
+    map<string, string> result_data = 5;
+}
+
+// System integrity validation request
+message ValidateIntegrityRequest {
+    repeated string components = 1;
+    bool deep_scan = 2;
+    map<string, string> validation_params = 3;
+}
+
+// System integrity validation response
+message ValidateIntegrityResponse {
+    float integrity_score = 1;  // 0.0-1.0 scale
+    map<string, float> component_scores = 2;
+    repeated string violations = 3;
+    google.protobuf.Timestamp validation_time = 4;
+}
+
+// Monitor threats request
+message MonitorThreatsRequest {
+    repeated string component_filters = 1;
+    repeated ThreatSeverity severity_filters = 2;
+    bool include_ml_analysis = 3;
+}
+
+// Security service providing comprehensive protection
+service SecurityService {
+    // Retrieve current security status
+    rpc GetSecurityStatus(google.protobuf.Empty) returns (SecurityStatus) {}
+
+    // Stream real-time threat monitoring data
+    rpc MonitorThreats(MonitorThreatsRequest) returns (stream ThreatAlert) {}
+
+    // Report a new security threat
+    rpc ReportThreat(ThreatAlert) returns (google.protobuf.Empty) {}
+
+    // Execute security response action
+    rpc ExecuteResponse(ResponseAction) returns (ResponseResult) {}
+
+    // Validate system integrity
+    rpc ValidateSystemIntegrity(ValidateIntegrityRequest) returns (ValidateIntegrityResponse) {}
+}
